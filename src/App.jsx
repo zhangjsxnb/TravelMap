@@ -8,6 +8,41 @@ import {
 } from 'lucide-react';
 
 // ==========================================
+// 🌟 数据库建表 SQL (强烈建议在 Supabase SQL Editor 执行一次，确保字段完全一致不报错)
+// ==========================================
+/*
+drop table if exists public.places;
+drop table if exists public.trips;
+drop table if exists public.memos;
+
+create table public.places (
+  id text primary key,
+  user_id uuid references auth.users not null,
+  name text,
+  location jsonb,
+  category text,
+  address text,
+  district text,
+  city text,
+  "savedAt" numeric
+);
+
+create table public.trips (
+  id text primary key,
+  user_id uuid references auth.users not null,
+  name text,
+  places jsonb
+);
+
+create table public.memos (
+  id text primary key,
+  user_id uuid references auth.users not null,
+  text text,
+  done boolean
+);
+*/
+
+// ==========================================
 // 1. API 密钥配置区 
 // ==========================================
 const AMAP_CONFIG = {
@@ -16,8 +51,8 @@ const AMAP_CONFIG = {
 };
 
 const SUPABASE_CONFIG = {
-  url: 'https://ncbzklntlyiqvpmezpnk.supabase.co', // 👉 填入: 'https://ncbzklntlyiqvpmezpnk.supabase.co'
-  key: 'sb_publishable_OsNM8K_bgwUQhGosWMrCfA_Lt4k93DL', // 👉 填入: 'sb_publishable_OsNM8K_bgwUQhGosWMrCfA_Lt4k93DL'
+  url: 'https://ncbzklntlyiqvpmezpnk.supabase.co', // 👉 必填：请填入您的 Supabase URL
+  key: 'sb_publishable_OsNM8K_bgwUQhGosWMrCfA_Lt4k93DL', // 👉 必填：请填入您的 Supabase anon key
 };
 
 const COLORS = {
@@ -53,15 +88,6 @@ const getLngLat = (loc) => {
   const numLat = Number(lat);
   if (!isNaN(numLng) && !isNaN(numLat)) return [numLng, numLat];
   return null;
-};
-
-const getEnv = (key) => {
-  try {
-    if (typeof import.meta !== 'undefined' && import.meta.env) {
-      return import.meta.env[key] || '';
-    }
-  } catch (e) {}
-  return '';
 };
 
 // ==========================================
@@ -124,7 +150,6 @@ const RealMap = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, current
           }
         });
 
-        // 多种交通模式的地图连线绘制
         if (isRoute && places.length >= 2) {
           const path = places.map(p => getLngLat(p.location)).filter(Boolean);
 
@@ -133,7 +158,6 @@ const RealMap = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, current
               const driving = new window.AMap.Driving({ map, hideMarkers: true });
               driving.search(path[0], path[path.length - 1], { waypoints: path.slice(1, -1) });
             } else {
-              // 步行、骑行、公交由于 API 限制不支持多途经点一次性绘制，采取分段绘制连线
               path.forEach((start, i) => {
                 if (i === path.length - 1) return;
                 const end = path[i+1];
@@ -141,17 +165,12 @@ const RealMap = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, current
                 if (routeMode === 'walking' && window.AMap.Walking) searcher = new window.AMap.Walking({ map, hideMarkers: true });
                 else if (routeMode === 'riding' && window.AMap.Riding) searcher = new window.AMap.Riding({ map, hideMarkers: true });
                 else if (routeMode === 'transit' && window.AMap.Transfer) {
-                  // 防止全国导致引擎报错，回退到北京或当前城市
                   const safeCity = currentCity === '全国' ? '北京' : currentCity;
                   searcher = new window.AMap.Transfer({ map, hideMarkers: true, city: safeCity });
                 }
                 
                 if (searcher) {
-                  try {
-                    searcher.search(start, end);
-                  } catch(err) {
-                    console.error('Route segment search error:', err);
-                  }
+                  try { searcher.search(start, end); } catch(err) { console.error('Route error:', err); }
                 }
               });
             }
@@ -192,9 +211,18 @@ export default function App() {
   const [mapErrorMsg, setMapErrorMsg] = useState('');
 
   const [activeTab, setActiveTab] = useState('map');
-  const [savedPlaces, setSavedPlaces] = useState([]);
-  const [trips, setTrips] = useState([]);
-  const [globalMemos, setGlobalMemos] = useState([{ id: '1', text: '身份证及重要证件', done: false }]);
+  const [savedPlaces, setSavedPlaces] = useState(() => {
+    const local = localStorage.getItem('travel_saved_places');
+    return local ? JSON.parse(local) : [];
+  });
+  const [trips, setTrips] = useState(() => {
+    const local = localStorage.getItem('travel_trips');
+    return local ? JSON.parse(local) : [];
+  });
+  const [globalMemos, setGlobalMemos] = useState(() => {
+    const local = localStorage.getItem('travel_memos');
+    return local ? JSON.parse(local) : [{ id: '1', text: '身份证及重要证件', done: false }];
+  });
   const [newMemoText, setNewMemoText] = useState('');
   
   const [currentCity, setCurrentCity] = useState(localStorage.getItem('lastCity') || '全国');
@@ -215,15 +243,38 @@ export default function App() {
   const [newTripModalVisible, setNewTripModalVisible] = useState(false);
   const [newTripName, setNewTripName] = useState('');
   
-  // 交通相关状态
   const [routeMode, setRouteMode] = useState('driving'); 
   const [segmentRoutes, setSegmentRoutes] = useState([]); 
   const [isCalculatingSegments, setIsCalculatingSegments] = useState(false);
 
   const autoComplete = useRef(null);
 
+  // --- 本地缓存备份 (无论是否登录都执行) ---
+  useEffect(() => { localStorage.setItem('travel_saved_places', JSON.stringify(savedPlaces)); }, [savedPlaces]);
+  useEffect(() => { localStorage.setItem('travel_trips', JSON.stringify(trips)); }, [trips]);
+  useEffect(() => { localStorage.setItem('travel_memos', JSON.stringify(globalMemos)); }, [globalMemos]);
+
+  // --- 云端数据同步：账号登录后拉取数据 ---
   useEffect(() => {
-    // 1. 高德地图安全加载 (防重载)
+    if (user && !user.is_anonymous && supabase) {
+      const fetchCloudData = async () => {
+        try {
+          const [pRes, tRes, mRes] = await Promise.all([
+            supabase.from('places').select('*').eq('user_id', user.id),
+            supabase.from('trips').select('*').eq('user_id', user.id),
+            supabase.from('memos').select('*').eq('user_id', user.id)
+          ]);
+          if (pRes.data && pRes.data.length > 0) setSavedPlaces(pRes.data);
+          if (tRes.data && tRes.data.length > 0) setTrips(tRes.data);
+          if (mRes.data && mRes.data.length > 0) setGlobalMemos(mRes.data);
+        } catch(e) { console.error('Cloud fetch error', e); }
+      };
+      fetchCloudData();
+    }
+  }, [user, supabase]);
+
+  // 初始化加载：高德地图 & Supabase
+  useEffect(() => {
     if (!AMAP_CONFIG.key || !AMAP_CONFIG.jscode) {
       setMapStatus('no-key');
     } else {
@@ -233,7 +284,6 @@ export default function App() {
       } else if (!document.getElementById('amap-script')) {
         const mapScript = document.createElement('script');
         mapScript.id = 'amap-script';
-        // 移除 crossOrigin='anonymous' 避免引起底层的 Script Error
         window._amapInitCallback = () => {
           if (window.AMap) {
              setMapStatus('success');
@@ -266,8 +316,7 @@ export default function App() {
       }
     }
 
-    // 2. Supabase 异步加载 (防重载)
-    if (SUPABASE_CONFIG.url && SUPABASE_CONFIG.key && !SUPABASE_CONFIG.url.includes('你的Supabase')) {
+    if (SUPABASE_CONFIG.url && SUPABASE_CONFIG.key) {
       const initSupa = (lib) => {
         const client = lib.createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.key);
         setSupabase(client);
@@ -285,7 +334,6 @@ export default function App() {
       } else if (!document.getElementById('supabase-script')) {
         const supaScript = document.createElement('script');
         supaScript.id = 'supabase-script';
-        // 更换为更稳定的 CDN 加速节点，并移除引发报错的 crossOrigin
         supaScript.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
         supaScript.async = true;
         supaScript.onload = () => {
@@ -331,14 +379,10 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [searchQuery, mapStatus, currentCity]);
 
-  // 获取当前正在浏览的行程包含的地点数组
   const tripPlaces = showRoutePanel && activeTripId 
     ? (trips.find(t => t.id === activeTripId)?.places.map(pid => savedPlaces.find(p => p.id === pid)).filter(Boolean) || [])
     : [];
 
-  // ==========================================
-  // 核心：分段路径的时间和距离计算
-  // ==========================================
   useEffect(() => {
     if (!window.AMap || tripPlaces.length < 2 || !showRoutePanel) {
       setSegmentRoutes([]);
@@ -413,9 +457,57 @@ export default function App() {
   }, [tripPlaces.map(p=>p.id).join(','), routeMode, currentCity, mapStatus, showRoutePanel]);
 
   // ==========================================
-  // 行程内节点顺序调整逻辑
+  // 云端同步写操作逻辑
   // ==========================================
-  const movePlace = (index, direction) => {
+  const handleSavePlace = async (placeData, stayOpen = false) => {
+    const newPlace = {
+      id: placeData.id || Date.now().toString(),
+      name: safeStr(placeData.name) || '未知地点',
+      location: placeData.location,
+      category: safeStr(placeData.category) || '景点',
+      address: safeStr(placeData.address) || '',
+      district: safeStr(placeData.district) || '',
+      city: currentCity === '全国' ? '默认城市' : currentCity, 
+      savedAt: Date.now()
+    };
+    setSavedPlaces(prev => {
+      const exists = prev.find(p => p.id === newPlace.id);
+      return exists ? prev.map(p => p.id === newPlace.id ? newPlace : p) : [newPlace, ...prev];
+    });
+
+    if (user && !user.is_anonymous && supabase) {
+      try { await supabase.from('places').upsert({ ...newPlace, user_id: user.id }); } catch(e){}
+    }
+    
+    if (!stayOpen) {
+      setSelectedPlace(null);
+      exitSearch();
+    }
+  };
+
+  const removePlace = async (id) => {
+    setSavedPlaces(prev => prev.filter(p => p.id !== id));
+    if (user && !user.is_anonymous && supabase) {
+      try { await supabase.from('places').delete().eq('id', id); } catch(e){}
+    }
+  };
+
+  const createTrip = async (newTrip) => {
+    setTrips(prev => [newTrip, ...prev]);
+    if (user && !user.is_anonymous && supabase) {
+      try { await supabase.from('trips').upsert({ ...newTrip, user_id: user.id }); } catch(e){}
+    }
+  };
+
+  const removeTrip = async (id) => {
+    setTrips(prev => prev.filter(t => t.id !== id));
+    if (user && !user.is_anonymous && supabase) {
+      try { await supabase.from('trips').delete().eq('id', id); } catch(e){}
+    }
+  };
+
+  const movePlace = async (index, direction) => {
+    let updatedPlaces = [];
     setTrips(prevTrips => prevTrips.map(trip => {
       if (trip.id === activeTripId) {
         const newPlaces = [...trip.places];
@@ -424,12 +516,46 @@ export default function App() {
         } else if (direction === 'down' && index < newPlaces.length - 1) {
           [newPlaces[index], newPlaces[index + 1]] = [newPlaces[index + 1], newPlaces[index]];
         }
+        updatedPlaces = newPlaces;
         return { ...trip, places: newPlaces };
       }
       return trip;
     }));
+
+    if (user && !user.is_anonymous && supabase && updatedPlaces.length > 0) {
+      try { await supabase.from('trips').update({ places: updatedPlaces }).eq('id', activeTripId); } catch(e){}
+    }
   };
 
+  const handleAddMemo = async () => {
+    if (newMemoText.trim()) {
+      const newMemo = { id: Date.now().toString(), text: newMemoText.trim(), done: false };
+      setGlobalMemos(prev => [newMemo, ...prev]);
+      setNewMemoText('');
+      
+      if (user && !user.is_anonymous && supabase) {
+        try { await supabase.from('memos').upsert({ ...newMemo, user_id: user.id }); } catch(e){}
+      }
+    }
+  };
+
+  const toggleMemo = async (id, currentDone) => {
+    setGlobalMemos(prev => prev.map(m => m.id === id ? { ...m, done: !currentDone } : m));
+    if (user && !user.is_anonymous && supabase) {
+      try { await supabase.from('memos').update({ done: !currentDone }).eq('id', id); } catch(e){}
+    }
+  };
+
+  const handleDeleteMemo = async (id) => {
+    setGlobalMemos(prev => prev.filter(m => m.id !== id));
+    if (user && !user.is_anonymous && supabase) {
+      try { await supabase.from('memos').delete().eq('id', id); } catch(e){}
+    }
+  };
+
+  // ==========================================
+  // Auth 及其他操作
+  // ==========================================
   const handleSendOtp = async () => {
     if (!supabase) return setAuthMessage('请先在顶部配置正确的 Supabase 密钥');
     if (!email) return setAuthMessage('请输入邮箱地址');
@@ -476,28 +602,6 @@ export default function App() {
     setCustomCityInput('');
   };
 
-  const handleSavePlace = (placeData, stayOpen = false) => {
-    const newPlace = {
-      id: placeData.id || Date.now().toString(),
-      name: safeStr(placeData.name) || '未知地点',
-      location: placeData.location,
-      category: safeStr(placeData.category) || '景点',
-      address: safeStr(placeData.address) || '',
-      district: safeStr(placeData.district) || '',
-      city: currentCity === '全国' ? '默认城市' : currentCity, 
-      savedAt: Date.now()
-    };
-    setSavedPlaces(prev => {
-      const exists = prev.find(p => p.id === newPlace.id);
-      return exists ? prev.map(p => p.id === newPlace.id ? newPlace : p) : [newPlace, ...prev];
-    });
-    
-    if (!stayOpen) {
-      setSelectedPlace(null);
-      exitSearch();
-    }
-  };
-
   const getRecommendations = (place) => {
     if (!place || !window.AMap?.GeometryUtil) return [];
     const p1 = getLngLat(place.location);
@@ -522,23 +626,14 @@ export default function App() {
       return;
     }
     const newTripId = 'trip_' + Date.now().toString();
-    const newTrip = {
+    createTrip({
        id: newTripId,
        name: `${currentCity} 智能路线`,
        places: cityPlaces.map(p => p.id)
-    };
-    setTrips([newTrip, ...trips]);
+    });
     setActiveTripId(newTripId);
     setShowRoutePanel(true);
   };
-
-  const handleAddMemo = () => {
-    if (newMemoText.trim()) {
-      setGlobalMemos([{ id: Date.now().toString(), text: newMemoText.trim(), done: false }, ...globalMemos]);
-      setNewMemoText('');
-    }
-  };
-  const handleDeleteMemo = (id) => setGlobalMemos(globalMemos.filter(m => m.id !== id));
 
   const filteredFavs = savedPlaces.filter(p => 
     safeStr(p.name).toLowerCase().includes(favSearchQuery.toLowerCase()) ||
@@ -629,7 +724,6 @@ export default function App() {
     );
   }
 
-  // 获取路线整体统计 (增加安全校验防止异常)
   const totalDist = segmentRoutes.reduce((acc, curr) => acc + (curr?.distance || 0), 0);
   const totalTime = segmentRoutes.reduce((acc, curr) => acc + (curr?.time || 0), 0);
 
@@ -701,7 +795,7 @@ export default function App() {
                               onClick={(e) => { 
                                 e.stopPropagation(); 
                                 if (isSaved) {
-                                  setSavedPlaces(prev => prev.filter(saved => saved.id !== p.id));
+                                  removePlace(p.id);
                                 } else {
                                   handleSavePlace(p, true);
                                 }
@@ -771,7 +865,7 @@ export default function App() {
                                 <MapPin size={10} /> {safeStr(spot.address)}
                               </p>
                             </div>
-                            <button onClick={(e) => { e.stopPropagation(); setSavedPlaces(savedPlaces.filter(p => p.id !== spot.id)); }} className="text-slate-300 hover:text-red-400 p-2 rounded-full hover:bg-red-50 transition-colors">
+                            <button onClick={(e) => { e.stopPropagation(); removePlace(spot.id); }} className="text-slate-300 hover:text-red-400 p-2 rounded-full hover:bg-red-50 transition-colors">
                               <Trash2 size={16} />
                             </button>
                           </div>
@@ -818,7 +912,7 @@ export default function App() {
                       <div key={trip.id} onClick={() => {setActiveTripId(trip.id); setShowRoutePanel(true)}} className="bg-white p-5 rounded-3xl shadow-sm border border-gray-50 cursor-pointer active:scale-95">
                         <div className="flex justify-between items-start mb-2">
                           <h3 className="font-bold text-lg">{safeStr(trip.name)}</h3>
-                          <button onClick={(e) => { e.stopPropagation(); setTrips(trips.filter(t => t.id !== trip.id)); }} className="text-slate-300 hover:text-red-400 p-1">
+                          <button onClick={(e) => { e.stopPropagation(); removeTrip(trip.id); }} className="text-slate-300 hover:text-red-400 p-1">
                             <Trash2 size={16} />
                           </button>
                         </div>
@@ -864,9 +958,7 @@ export default function App() {
                   ) : (
                     globalMemos.map(m => (
                       <div key={m.id} className="bg-white p-4 rounded-2xl shadow-sm flex items-center justify-between border border-gray-50 transition-transform">
-                         <div className="flex items-center gap-3 cursor-pointer flex-1" onClick={() => {
-                             setGlobalMemos(globalMemos.map(g => g.id === m.id ? {...g, done: !g.done} : g));
-                         }}>
+                         <div className="flex items-center gap-3 cursor-pointer flex-1" onClick={() => { toggleMemo(m.id, m.done); }}>
                             {m.done ? <CheckCircle2 size={20} color={COLORS.primary}/> : <Circle size={20} color={COLORS.textLight}/>}
                             <span className={`text-sm font-medium ${m.done ? 'line-through text-slate-300' : 'text-slate-700'}`}>{safeStr(m.text)}</span>
                          </div>
@@ -988,7 +1080,7 @@ export default function App() {
                 <button className="flex-1 py-3 rounded-xl bg-gray-100 text-sm font-bold text-slate-600 active:scale-95" onClick={() => { setNewTripModalVisible(false); setNewTripName(''); }}>取消</button>
                 <button className="flex-1 py-3 rounded-xl text-white text-sm font-bold active:scale-95 disabled:opacity-50" style={{ backgroundColor: COLORS.primary }} disabled={!newTripName.trim()} onClick={() => {
                   if (newTripName.trim()) {
-                    setTrips([{ id: Date.now().toString(), name: newTripName.trim(), places: [] }, ...trips]);
+                    createTrip({ id: Date.now().toString(), name: newTripName.trim(), places: [] });
                     setNewTripModalVisible(false);
                     setNewTripName('');
                   }
@@ -1012,7 +1104,6 @@ export default function App() {
             <div className="flex-1 overflow-y-auto pb-10">
               <div className="p-6 pb-2 space-y-6">
                  
-                 {/* 地图：支持四种引擎的切换与重新渲染 */}
                  <RealMap 
                    places={tripPlaces} 
                    isRoute={true} 
@@ -1027,11 +1118,9 @@ export default function App() {
                        <span className="text-[10px] bg-blue-100 text-blue-600 px-2 py-0.5 rounded font-bold">可调整顺序</span>
                     </div>
                     
-                    {/* 分段交通与时间轴展示 */}
                     <div className="flex flex-col relative">
                        {tripPlaces.map((p, i) => (
                          <React.Fragment key={p.id + i}>
-                           {/* 节点气泡与内容 */}
                            <div className="flex gap-4 items-start z-10 relative bg-transparent">
                              <div className="w-7 h-7 rounded-full bg-blue-500 text-white flex items-center justify-center text-xs font-bold shrink-0 shadow-md relative z-10 mt-1">
                                {i + 1}
@@ -1043,14 +1132,12 @@ export default function App() {
                                   {safeStr(p.address) || safeStr(p.district) || '暂无详细地址'}
                                </div>
                              </div>
-                             {/* 自定义顺序调节按钮 */}
                              <div className="flex flex-col gap-1 shrink-0 ml-2">
                                <button disabled={i===0} onClick={() => movePlace(i, 'up')} className="p-1 text-slate-400 hover:text-blue-500 disabled:opacity-20 active:scale-90 transition-all"><ChevronUp size={16}/></button>
                                <button disabled={i===tripPlaces.length-1} onClick={() => movePlace(i, 'down')} className="p-1 text-slate-400 hover:text-blue-500 disabled:opacity-20 active:scale-90 transition-all"><ChevronDown size={16}/></button>
                              </div>
                            </div>
                            
-                           {/* 节点之间的交通情况 */}
                            {i < tripPlaces.length - 1 && (
                              <div className="ml-[13px] border-l-[2px] border-dashed border-blue-200 pl-6 py-4 my-0.5 relative">
                                <div className="absolute -left-[11px] top-1/2 -translate-y-1/2 bg-white rounded-full p-1 text-blue-400 border border-blue-100 shadow-sm">
@@ -1073,7 +1160,6 @@ export default function App() {
                        ))}
                     </div>
 
-                    {/* 交通推荐底部合计与模式切换 */}
                     {segmentRoutes.length > 0 && !isCalculatingSegments && (
                       <div className="mt-6 p-4 bg-white rounded-2xl shadow-sm border border-blue-50">
                          <div className="flex gap-2 mb-5 overflow-x-auto hide-scrollbar pb-1">
@@ -1173,13 +1259,12 @@ export default function App() {
 
                 <button
                   onClick={() => {
-                     const newTripId = Date.now().toString();
-                     const newTrip = {
+                     const newTripId = 'trip_' + Date.now().toString();
+                     createTrip({
                         id: newTripId,
                         name: `从 ${routeBuilderStart.name} 出发`,
                         places: [routeBuilderStart.id, ...routeBuilderTargets]
-                     };
-                     setTrips([newTrip, ...trips]);
+                     });
                      setRouteBuilderStart(null);
                      setActiveTab('lists');
                      setActiveTripId(newTripId);
