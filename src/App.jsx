@@ -4,30 +4,20 @@ import {
   Navigation, Calendar, CheckCircle2, Circle, 
   ChevronRight, ArrowRight, X, Sparkles, Trash2, ClipboardList,
   Mail, KeyRound, Loader2, LogOut, AlertCircle, ChevronDown, ChevronLeft, LocateFixed,
-  Star
+  Star, ChevronUp, Car, Bus, Footprints, Bike
 } from 'lucide-react';
 
 // ==========================================
-// 1. API 密钥配置区 (在此处填入您的 Supabase 密钥即可激活邮箱登录)
+// 1. API 密钥配置区 
 // ==========================================
 const AMAP_CONFIG = {
-  key: '6a06a2de3f4cc4a4a7a21a12e85aa48f', // 高德 Key
-  jscode: 'ec662b0cbf8e9b00dfd0642742c51808',  // 高德安全密钥
-};
-
-// 安全获取环境变量
-const getEnv = (key) => {
-  try {
-    if (typeof import.meta !== 'undefined' && import.meta.env) {
-      return import.meta.env[key] || '';
-    }
-  } catch (e) {}
-  return '';
+  key: '6a06a2de3f4cc4a4a7a21a12e85aa48f', 
+  jscode: 'ec662b0cbf8e9b00dfd0642742c51808',  
 };
 
 const SUPABASE_CONFIG = {
-  url: getEnv('https://ncbzklntlyiqvpmezpnk.supabase.co') || '', // 👉 填入您的 Supabase URL
-  key: getEnv('sb_publishable_OsNM8K_bgwUQhGosWMrCfA_Lt4k93DL') || '', // 👉 填入您的 Supabase anon key
+  url: '', // 👉 填入: 'https://ncbzklntlyiqvpmezpnk.supabase.co'
+  key: '', // 👉 填入: 'sb_publishable_OsNM8K_bgwUQhGosWMrCfA_Lt4k93DL'
 };
 
 const COLORS = {
@@ -48,10 +38,36 @@ const safeStr = (val) => {
   return '';
 };
 
+// 安全解析经纬度，防止未定义的数据格式导致 Script Error
+const getLngLat = (loc) => {
+  if (!loc) return null;
+  let lng, lat;
+  if (loc.lng !== undefined && loc.lat !== undefined) {
+    lng = loc.lng; lat = loc.lat;
+  } else if (loc.R !== undefined && loc.Q !== undefined) {
+    lng = loc.R; lat = loc.Q;
+  } else if (Array.isArray(loc) && loc.length >= 2) {
+    lng = loc[0]; lat = loc[1];
+  }
+  const numLng = Number(lng);
+  const numLat = Number(lat);
+  if (!isNaN(numLng) && !isNaN(numLat)) return [numLng, numLat];
+  return null;
+};
+
+const getEnv = (key) => {
+  try {
+    if (typeof import.meta !== 'undefined' && import.meta.env) {
+      return import.meta.env[key] || '';
+    }
+  } catch (e) {}
+  return '';
+};
+
 // ==========================================
-// 地图核心组件 (修复需求4：支持点击地图上的地点)
+// 地图核心组件
 // ==========================================
-const RealMap = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, currentCity, onMarkerClick }) => {
+const RealMap = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, currentCity, onMarkerClick, routeMode = 'driving' }) => {
   const containerRef = useRef(null);
   const mapInstance = useRef(null);
   const prevCityRef = useRef(currentCity);
@@ -63,10 +79,9 @@ const RealMap = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, current
           mapInstance.current = new window.AMap.Map(containerRef.current, {
             zoom: 11,
             mapStyle: 'amap://styles/normal',
-            isHotspot: true // 开启地图热点，允许点击地图自带的地点
+            isHotspot: true 
           });
           
-          // 监听地图热点点击事件
           mapInstance.current.on('hotspotclick', (e) => {
             if (onMarkerClick) {
               onMarkerClick({
@@ -82,7 +97,6 @@ const RealMap = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, current
         
         const map = mapInstance.current;
         
-        // 城市联动切换
         if (prevCityRef.current !== currentCity) {
           if (currentCity !== '全国') {
             map.setCity(currentCity);
@@ -90,38 +104,54 @@ const RealMap = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, current
           prevCityRef.current = currentCity;
         }
 
-        map.clearMap(); // 清除之前的标记
+        map.clearMap();
 
         if (places.length === 0 && currentCity !== '全国') {
           map.setCity(currentCity);
         }
 
         places.forEach((p, idx) => {
-          const lng = p.location?.lng || p.location?.R || p.location?.[0];
-          const lat = p.location?.lat || p.location?.Q || p.location?.[1];
-          
-          if (lng && lat) {
+          const coords = getLngLat(p.location);
+          if (coords) {
              const marker = new window.AMap.Marker({
-               position: [lng, lat],
+               position: coords,
                cursor: onMarkerClick ? 'pointer' : 'default',
                label: { content: String(isRoute ? idx + 1 : safeStr(p.name)), direction: 'top' },
                extData: p
              });
-             // 支持点击自己收藏的标记
              if (onMarkerClick) marker.on('click', () => onMarkerClick(p));
              map.add(marker);
           }
         });
 
-        if (isRoute && places.length >= 2 && window.AMap.Driving) {
-          const driving = new window.AMap.Driving({ map, hideMarkers: true });
-          const path = places.map(p => {
-            const lng = p.location?.lng || p.location?.R || p.location?.[0];
-            const lat = p.location?.lat || p.location?.Q || p.location?.[1];
-            return lng && lat ? [lng, lat] : null;
-          }).filter(Boolean);
+        // 多种交通模式的地图连线绘制
+        if (isRoute && places.length >= 2) {
+          const path = places.map(p => getLngLat(p.location)).filter(Boolean);
 
-          if (path.length >= 2) driving.search(path[0], path[path.length - 1], { waypoints: path.slice(1, -1) });
+          if (path.length >= 2) {
+            if (routeMode === 'driving' && window.AMap.Driving) {
+              const driving = new window.AMap.Driving({ map, hideMarkers: true });
+              driving.search(path[0], path[path.length - 1], { waypoints: path.slice(1, -1) });
+            } else {
+              // 步行、骑行、公交由于 API 限制不支持多途经点一次性绘制，采取分段绘制连线
+              path.forEach((start, i) => {
+                if (i === path.length - 1) return;
+                const end = path[i+1];
+                let searcher;
+                if (routeMode === 'walking' && window.AMap.Walking) searcher = new window.AMap.Walking({ map, hideMarkers: true });
+                else if (routeMode === 'riding' && window.AMap.Riding) searcher = new window.AMap.Riding({ map, hideMarkers: true });
+                else if (routeMode === 'transit' && window.AMap.Transfer) searcher = new window.AMap.Transfer({ map, hideMarkers: true, city: currentCity });
+                
+                if (searcher) {
+                  try {
+                    searcher.search(start, end);
+                  } catch(err) {
+                    console.error('Route segment search error:', err);
+                  }
+                }
+              });
+            }
+          }
         } else if (places.length > 0 && !isRoute) {
           map.setFitView();
         }
@@ -129,7 +159,7 @@ const RealMap = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, current
         console.error("Map rendering error:", err);
       }
     }
-  }, [places, isRoute, mapStatus, currentCity, onMarkerClick]);
+  }, [places, isRoute, mapStatus, currentCity, onMarkerClick, routeMode]);
 
   if (mapStatus === 'loading') return <div className="w-full aspect-square bg-blue-50 rounded-3xl flex items-center justify-center text-blue-300 shadow-inner mb-6"><Loader2 className="animate-spin" /></div>;
   if (mapStatus === 'no-key') return <div className="w-full aspect-square bg-gray-50 border-2 border-dashed border-gray-200 rounded-3xl flex flex-col items-center justify-center p-6 text-center shadow-inner mb-6"><MapIcon size={32} className="text-gray-300 mb-3" /><p className="text-sm font-bold text-gray-500 mb-1">尚未配置完整的地图 API</p></div>;
@@ -157,14 +187,12 @@ export default function App() {
   const [mapStatus, setMapStatus] = useState('loading');
   const [mapErrorMsg, setMapErrorMsg] = useState('');
 
-  // 核心功能状态 (严格保留原有)
   const [activeTab, setActiveTab] = useState('map');
   const [savedPlaces, setSavedPlaces] = useState([]);
   const [trips, setTrips] = useState([]);
   const [globalMemos, setGlobalMemos] = useState([{ id: '1', text: '身份证及重要证件', done: false }]);
   const [newMemoText, setNewMemoText] = useState('');
   
-  // 发现页面 & 城市切换
   const [currentCity, setCurrentCity] = useState(localStorage.getItem('lastCity') || '全国');
   const [showCityPicker, setShowCityPicker] = useState(false);
   const [customCityInput, setCustomCityInput] = useState('');
@@ -174,7 +202,6 @@ export default function App() {
   const [searchResults, setSearchResults] = useState([]);
   const [selectedPlace, setSelectedPlace] = useState(null);
 
-  // 需求2：收藏夹相关状态 (搜索与路线规划)
   const [favSearchQuery, setFavSearchQuery] = useState('');
   const [routeBuilderStart, setRouteBuilderStart] = useState(null);
   const [routeBuilderTargets, setRouteBuilderTargets] = useState([]);
@@ -183,76 +210,93 @@ export default function App() {
   const [showRoutePanel, setShowRoutePanel] = useState(false);
   const [newTripModalVisible, setNewTripModalVisible] = useState(false);
   const [newTripName, setNewTripName] = useState('');
+  
+  // 交通相关状态
+  const [routeMode, setRouteMode] = useState('driving'); 
+  const [segmentRoutes, setSegmentRoutes] = useState([]); // 保存分段的具体距离和时间
+  const [isCalculatingSegments, setIsCalculatingSegments] = useState(false);
 
   const autoComplete = useRef(null);
 
-  // 初始化加载：高德地图 & Supabase
   useEffect(() => {
-    // 1. 高德地图安全加载
+    // 1. 高德地图安全加载 (防重载)
     if (!AMAP_CONFIG.key || !AMAP_CONFIG.jscode) {
       setMapStatus('no-key');
     } else {
       window._AMapSecurityConfig = { securityJsCode: AMAP_CONFIG.jscode };
-      const mapScript = document.createElement('script');
-      window._amapInitCallback = () => {
-        if (window.AMap) {
-           setMapStatus('success');
-           if (!localStorage.getItem('lastCity')) {
-             window.AMap.plugin('AMap.Geolocation', function() {
-               var geolocation = new window.AMap.Geolocation({
-                   enableHighAccuracy: true, timeout: 10000, buttonPosition: 'RB'
+      if (window.AMap) {
+        setMapStatus('success');
+      } else if (!document.getElementById('amap-script')) {
+        const mapScript = document.createElement('script');
+        mapScript.id = 'amap-script';
+        mapScript.crossOrigin = 'anonymous';
+        window._amapInitCallback = () => {
+          if (window.AMap) {
+             setMapStatus('success');
+             if (!localStorage.getItem('lastCity')) {
+               window.AMap.plugin('AMap.Geolocation', function() {
+                 var geolocation = new window.AMap.Geolocation({
+                     enableHighAccuracy: true, timeout: 10000, buttonPosition: 'RB'
+                 });
+                 geolocation.getCityInfo((status, result) => {
+                     if(status === 'complete' && result.city) {
+                         const c = result.city.replace('市', '');
+                         setCurrentCity(c);
+                         localStorage.setItem('lastCity', c);
+                     }
+                 });
                });
-               geolocation.getCityInfo((status, result) => {
-                   if(status === 'complete' && result.city) {
-                       const c = result.city.replace('市', '');
-                       setCurrentCity(c);
-                       localStorage.setItem('lastCity', c);
-                   }
-               });
-             });
-           }
-        } else {
-           setMapStatus('error');
-           setMapErrorMsg('脚本加载成功但 AMap 对象不存在');
-        }
-      };
-      mapScript.src = `https://webapi.amap.com/maps?v=2.0&key=${AMAP_CONFIG.key}&plugin=AMap.AutoComplete,AMap.PlaceSearch,AMap.GeometryUtil,AMap.Driving,AMap.Geolocation&callback=_amapInitCallback`;
-      mapScript.async = true;
-      mapScript.onerror = () => {
-        setMapStatus('error');
-        setMapErrorMsg('网络请求被拦截，请检查浏览器插件');
-      };
-      document.head.appendChild(mapScript);
+             }
+          } else {
+             setMapStatus('error');
+             setMapErrorMsg('脚本加载成功但 AMap 对象不存在');
+          }
+        };
+        // 加入了 Transfer 插件以支持公交/地铁查询
+        mapScript.src = `https://webapi.amap.com/maps?v=2.0&key=${AMAP_CONFIG.key}&plugin=AMap.AutoComplete,AMap.PlaceSearch,AMap.GeometryUtil,AMap.Driving,AMap.Walking,AMap.Riding,AMap.Transfer,AMap.Geolocation&callback=_amapInitCallback`;
+        mapScript.async = true;
+        mapScript.onerror = () => {
+          setMapStatus('error');
+          setMapErrorMsg('网络请求被拦截，请检查浏览器插件');
+        };
+        document.head.appendChild(mapScript);
+      }
     }
 
-    // 2. Supabase 异步加载
+    // 2. Supabase 异步加载 (防重载)
     if (SUPABASE_CONFIG.url && SUPABASE_CONFIG.key && !SUPABASE_CONFIG.url.includes('你的Supabase')) {
-      const supaScript = document.createElement('script');
-      supaScript.src = 'https://unpkg.com/@supabase/supabase-js@2';
-      supaScript.async = true;
-      supaScript.onload = () => {
-        if (window.supabase) {
-          const client = window.supabase.createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.key);
-          setSupabase(client);
-          client.auth.getSession().then(({ data: { session } }) => {
-            setUser(session?.user ?? null);
-            setAuthLoading(false);
-          });
-          client.auth.onAuthStateChange((_event, session) => {
-            setUser(session?.user ?? null);
-          });
-        } else {
+      const initSupa = (lib) => {
+        const client = lib.createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.key);
+        setSupabase(client);
+        client.auth.getSession().then(({ data: { session } }) => {
+          setUser(session?.user ?? null);
           setAuthLoading(false);
-        }
+        });
+        client.auth.onAuthStateChange((_event, session) => {
+          setUser(session?.user ?? null);
+        });
       };
-      supaScript.onerror = () => setAuthLoading(false);
-      document.head.appendChild(supaScript);
+
+      if (window.supabase) {
+        initSupa(window.supabase);
+      } else if (!document.getElementById('supabase-script')) {
+        const supaScript = document.createElement('script');
+        supaScript.id = 'supabase-script';
+        supaScript.src = 'https://unpkg.com/@supabase/supabase-js@2';
+        supaScript.crossOrigin = 'anonymous';
+        supaScript.async = true;
+        supaScript.onload = () => {
+          if (window.supabase) initSupa(window.supabase);
+          else setAuthLoading(false);
+        };
+        supaScript.onerror = () => setAuthLoading(false);
+        document.head.appendChild(supaScript);
+      }
     } else {
       setAuthLoading(false); 
     }
   }, []);
 
-  // 高德精准搜索逻辑
   useEffect(() => {
     const timer = setTimeout(() => {
       if (mapStatus === 'success' && searchQuery && window.AMap?.AutoComplete) {
@@ -265,13 +309,18 @@ export default function App() {
            autoComplete.current.setCityLimit(currentCity !== '全国');
         }
 
-        autoComplete.current.search(searchQuery, (status, result) => {
-          if (status === 'complete' && result?.tips) {
-            setSearchResults(result.tips.filter(item => item && item.location));
-          } else {
-            setSearchResults([]);
-          }
-        });
+        try {
+          autoComplete.current.search(searchQuery, (status, result) => {
+            if (status === 'complete' && result?.tips) {
+              setSearchResults(result.tips.filter(item => item && item.location));
+            } else {
+              setSearchResults([]);
+            }
+          });
+        } catch(e) {
+          console.error('Search error', e);
+          setSearchResults([]);
+        }
       } else {
         setSearchResults([]);
       }
@@ -279,11 +328,104 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [searchQuery, mapStatus, currentCity]);
 
+  // 获取当前正在浏览的行程包含的地点数组
+  const tripPlaces = showRoutePanel && activeTripId 
+    ? (trips.find(t => t.id === activeTripId)?.places.map(pid => savedPlaces.find(p => p.id === pid)).filter(Boolean) || [])
+    : [];
+
   // ==========================================
-  // Supabase 鉴权与操作 (需求1：邮箱登录完整逻辑)
+  // 核心：分段路径的时间和距离计算
   // ==========================================
+  useEffect(() => {
+    if (!window.AMap || tripPlaces.length < 2 || !showRoutePanel) {
+      setSegmentRoutes([]);
+      return;
+    }
+    
+    let canceled = false;
+    setIsCalculatingSegments(true);
+
+    const fetchSegments = async () => {
+      const results = [];
+      for (let i = 0; i < tripPlaces.length - 1; i++) {
+         const p1 = tripPlaces[i];
+         const p2 = tripPlaces[i+1];
+         const start = getLngLat(p1.location);
+         const end = getLngLat(p2.location);
+
+         if (!start || !end) {
+           results.push({ distance: 0, time: 0 });
+           continue;
+         }
+
+         const res = await new Promise((resolve) => {
+           let searcher;
+           try {
+             if (routeMode === 'walking' && window.AMap.Walking) searcher = new window.AMap.Walking();
+             else if (routeMode === 'riding' && window.AMap.Riding) searcher = new window.AMap.Riding();
+             else if (routeMode === 'transit' && window.AMap.Transfer) searcher = new window.AMap.Transfer({ city: currentCity });
+             else if (window.AMap.Driving) searcher = new window.AMap.Driving();
+  
+             if (searcher) {
+               searcher.search(start, end, (status, result) => {
+                  try {
+                    if (status === 'complete') {
+                       let distance = 0, time = 0;
+                       if (routeMode === 'transit' && result.plans && result.plans.length > 0) {
+                          distance = result.plans[0].distance;
+                          time = result.plans[0].time;
+                       } else if (result.routes && result.routes.length > 0) {
+                          distance = result.routes[0].distance;
+                          time = result.routes[0].time;
+                       }
+                       resolve({ distance, time });
+                    } else {
+                       const dist = window.AMap.GeometryUtil.distance(start, end);
+                       const speed = routeMode === 'walking' ? 1.2 : routeMode === 'riding' ? 4 : 10;
+                       resolve({ distance: dist, time: dist / speed });
+                    }
+                  } catch(e) {
+                    resolve({ distance: 0, time: 0 });
+                  }
+               });
+             } else {
+               resolve({ distance: 0, time: 0 });
+             }
+           } catch (e) {
+             resolve({ distance: 0, time: 0 });
+           }
+         });
+         results.push(res);
+      }
+      if (!canceled) {
+        setSegmentRoutes(results);
+        setIsCalculatingSegments(false);
+      }
+    };
+    fetchSegments();
+    return () => { canceled = true; };
+  }, [tripPlaces.map(p=>p.id).join(','), routeMode, currentCity, mapStatus, showRoutePanel]);
+
+  // ==========================================
+  // 行程内节点顺序调整逻辑
+  // ==========================================
+  const movePlace = (index, direction) => {
+    setTrips(prevTrips => prevTrips.map(trip => {
+      if (trip.id === activeTripId) {
+        const newPlaces = [...trip.places];
+        if (direction === 'up' && index > 0) {
+          [newPlaces[index - 1], newPlaces[index]] = [newPlaces[index], newPlaces[index - 1]];
+        } else if (direction === 'down' && index < newPlaces.length - 1) {
+          [newPlaces[index], newPlaces[index + 1]] = [newPlaces[index + 1], newPlaces[index]];
+        }
+        return { ...trip, places: newPlaces };
+      }
+      return trip;
+    }));
+  };
+
   const handleSendOtp = async () => {
-    if (!supabase) return setAuthMessage('请先在顶部配置 Supabase 密钥以启用邮箱登录');
+    if (!supabase) return setAuthMessage('请先在顶部配置正确的 Supabase 密钥');
     if (!email) return setAuthMessage('请输入邮箱地址');
     setAuthLoading(true); setAuthMessage('');
     const { error } = await supabase.auth.signInWithOtp({ email });
@@ -315,9 +457,6 @@ export default function App() {
     setUser(null); setOtpSent(false); setEmail(''); setOtp(''); setAuthMessage('');
   };
 
-  // ==========================================
-  // 核心业务逻辑
-  // ==========================================
   const exitSearch = () => {
     setIsSearching(false);
     setSearchQuery('');
@@ -331,7 +470,6 @@ export default function App() {
     setCustomCityInput('');
   };
 
-  // 保存地点 (修复需求3：支持静默保存，不关闭页面)
   const handleSavePlace = (placeData, stayOpen = false) => {
     const newPlace = {
       id: placeData.id || Date.now().toString(),
@@ -354,22 +492,40 @@ export default function App() {
     }
   };
 
-  // 推荐周边算法
   const getRecommendations = (place) => {
-    if (!place || !place.location || !window.AMap?.GeometryUtil) return [];
-    const p1 = [place.location.lng || place.location.R, place.location.lat || place.location.Q];
+    if (!place || !window.AMap?.GeometryUtil) return [];
+    const p1 = getLngLat(place.location);
+    if (!p1) return [];
+    
     return savedPlaces
-      .filter(p => p.id !== place.id && p.location)
+      .filter(p => p.id !== place.id)
       .map(p => {
-        const p2 = [p.location.lng || p.location.R, p.location.lat || p.location.Q];
+        const p2 = getLngLat(p.location);
+        if (!p2) return { ...p, distance: Infinity };
         return { ...p, distance: window.AMap.GeometryUtil.distance(p1, p2) };
       })
-      .filter(p => p.distance < 10000) // 10km内
+      .filter(p => p.distance < 10000)
       .sort((a, b) => a.distance - b.distance)
-      .slice(0, 5); // 最多推荐5个
+      .slice(0, 5);
   };
 
-  // 备忘录逻辑 (原样保留)
+  const handleSmartRoute = () => {
+    const cityPlaces = savedPlaces.filter(p => p.city === currentCity);
+    if (cityPlaces.length < 2) {
+      alert(`${currentCity} 收藏的地点不足2个，无法规划路线，请先去发现页面多收藏几个吧！`);
+      return;
+    }
+    const newTripId = 'trip_' + Date.now().toString();
+    const newTrip = {
+       id: newTripId,
+       name: `${currentCity} 智能路线`,
+       places: cityPlaces.map(p => p.id)
+    };
+    setTrips([newTrip, ...trips]);
+    setActiveTripId(newTripId);
+    setShowRoutePanel(true);
+  };
+
   const handleAddMemo = () => {
     if (newMemoText.trim()) {
       setGlobalMemos([{ id: Date.now().toString(), text: newMemoText.trim(), done: false }, ...globalMemos]);
@@ -378,7 +534,6 @@ export default function App() {
   };
   const handleDeleteMemo = (id) => setGlobalMemos(globalMemos.filter(m => m.id !== id));
 
-  // 需求2：收藏夹搜索过滤
   const filteredFavs = savedPlaces.filter(p => 
     safeStr(p.name).toLowerCase().includes(favSearchQuery.toLowerCase()) ||
     safeStr(p.address).toLowerCase().includes(favSearchQuery.toLowerCase())
@@ -391,9 +546,6 @@ export default function App() {
     return acc;
   }, {});
 
-  // ==========================================
-  // UI 渲染 - 登录页
-  // ==========================================
   if (authLoading && !user && !email) {
     return <div className="min-h-[100dvh] flex items-center justify-center bg-[#FCF8E7]"><Loader2 className="animate-spin text-[#95C2E2]" size={32}/></div>;
   }
@@ -471,9 +623,10 @@ export default function App() {
     );
   }
 
-  // ==========================================
-  // UI 渲染 - 主应用
-  // ==========================================
+  // 获取路线整体统计 (增加安全校验防止异常)
+  const totalDist = segmentRoutes.reduce((acc, curr) => acc + (curr?.distance || 0), 0);
+  const totalTime = segmentRoutes.reduce((acc, curr) => acc + (curr?.time || 0), 0);
+
   return (
     <div className="min-h-[100dvh] w-full flex justify-center bg-gray-100 sm:bg-[#f0f4f8]">
       <div className="w-full sm:max-w-md h-[100dvh] flex flex-col relative bg-white overflow-hidden shadow-2xl">
@@ -489,7 +642,6 @@ export default function App() {
               <div className="px-6 shrink-0">
                 {!isSearching && <h2 className="text-2xl font-bold mb-4" style={{ color: COLORS.textDark }}>发现地点</h2>}
                 
-                {/* 顶部搜索与城市切换栏 */}
                 <div className="flex items-center gap-3 mb-6">
                   {isSearching ? (
                     <button onClick={exitSearch} className="p-2 -ml-2 rounded-full hover:bg-gray-100 active:scale-95 transition-all text-slate-600 shrink-0">
@@ -539,14 +691,13 @@ export default function App() {
                                 <MapPin size={10}/> {safeStr(p.district)} {safeStr(p.address)}
                               </p>
                             </div>
-                            {/* 需求3：加号改为星星，点击收藏保留在本页面 */}
                             <button 
                               onClick={(e) => { 
                                 e.stopPropagation(); 
                                 if (isSaved) {
                                   setSavedPlaces(prev => prev.filter(saved => saved.id !== p.id));
                                 } else {
-                                  handleSavePlace(p, true); // true = 静默收藏，不退回主页
+                                  handleSavePlace(p, true);
                                 }
                               }} 
                               className={`shrink-0 p-2 rounded-full transition-colors ${isSaved ? 'bg-yellow-50' : 'bg-gray-50 hover:bg-gray-100'}`}
@@ -567,7 +718,7 @@ export default function App() {
                       mapStatus={mapStatus} 
                       mapErrorMsg={mapErrorMsg} 
                       currentCity={currentCity} 
-                      onMarkerClick={(p) => setSelectedPlace(p)} // 需求4：支持点击地图点
+                      onMarkerClick={(p) => setSelectedPlace(p)}
                     />
                     {savedPlaces.length === 0 && mapStatus === 'success' && (
                       <div className="bg-white p-4 rounded-2xl text-center text-xs text-slate-500 shadow-sm flex items-center justify-center gap-2">
@@ -580,13 +731,11 @@ export default function App() {
             </div>
           )}
 
-          {/* ==================== 增强版：收藏夹页面 (需求2：搜索与行程推荐) ==================== */}
+          {/* ==================== 收藏夹页面 ==================== */}
           {activeTab === 'favorites' && (
             <div className="h-full flex flex-col animate-in fade-in bg-[#f0f4f8]">
                <div className="px-6 pt-5 pb-3 bg-white shadow-sm z-10 shrink-0">
                  <h2 className="text-2xl font-bold">我的收藏夹</h2>
-                 
-                 {/* 需求2：收藏夹内搜索 */}
                  <div className="relative mt-4">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
                     <input 
@@ -607,7 +756,6 @@ export default function App() {
                         {groupedFavorites[city].map(spot => (
                           <div 
                             key={spot.id} 
-                            // 需求2：选中一个地点作为起点，拉起路线推荐
                             onClick={() => { setRouteBuilderStart(spot); setRouteBuilderTargets([]); }}
                             className="bg-white p-4 rounded-2xl shadow-sm border border-gray-50 flex justify-between items-center cursor-pointer active:scale-95 transition-transform"
                           >
@@ -635,20 +783,39 @@ export default function App() {
             </div>
           )}
 
-          {/* ==================== 行程页面 (原有逻辑全部保留) ==================== */}
+          {/* ==================== 行程页面 ==================== */}
           {activeTab === 'lists' && (
             <div className="h-full flex flex-col px-6 animate-in fade-in">
                <div className="flex justify-between items-center py-4">
                   <h2 className="text-2xl font-bold">我的行程</h2>
                   <button onClick={() => setNewTripModalVisible(true)} className="w-10 h-10 rounded-full flex items-center justify-center bg-white shadow-sm active:scale-95"><Plus size={20} color={COLORS.primary}/></button>
                </div>
-               <div className="flex-1 overflow-y-auto pb-24 space-y-4">
+               <div className="flex-1 overflow-y-auto pb-24 space-y-4 pt-2">
+                  <div 
+                    onClick={handleSmartRoute} 
+                    className="bg-gradient-to-r from-blue-400 to-blue-600 p-5 rounded-3xl shadow-md text-white cursor-pointer active:scale-95 transition-transform"
+                  >
+                    <div className="flex items-center gap-2 mb-2">
+                      <Navigation size={20} />
+                      <h3 className="font-bold text-lg">智能路线规划</h3>
+                    </div>
+                    <p className="text-xs text-blue-100 opacity-90">一键串联你在 {currentCity} 收藏的所有地点并生成行程</p>
+                  </div>
+
+                  <div className="h-px bg-gray-200 my-4"></div>
+
+                  <h3 className="font-bold text-slate-600">自定义行程</h3>
                   {trips.length === 0 ? (
-                    <div className="text-center py-10 text-sm text-slate-400 mt-10">还没创建行程，点击右上角加号创建吧</div>
+                    <div className="text-center py-6 text-sm text-slate-400">还没创建自定义行程，点击上方卡片或右上角加号创建吧</div>
                   ) : (
                     trips.map(trip => (
                       <div key={trip.id} onClick={() => {setActiveTripId(trip.id); setShowRoutePanel(true)}} className="bg-white p-5 rounded-3xl shadow-sm border border-gray-50 cursor-pointer active:scale-95">
-                        <h3 className="font-bold text-lg mb-2">{safeStr(trip.name)}</h3>
+                        <div className="flex justify-between items-start mb-2">
+                          <h3 className="font-bold text-lg">{safeStr(trip.name)}</h3>
+                          <button onClick={(e) => { e.stopPropagation(); setTrips(trips.filter(t => t.id !== trip.id)); }} className="text-slate-300 hover:text-red-400 p-1">
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
                         <p className="text-xs text-slate-400 flex items-center gap-1"><MapPin size={12}/> {trip.places?.length || 0} 个站点</p>
                       </div>
                     ))
@@ -657,7 +824,7 @@ export default function App() {
             </div>
           )}
 
-          {/* ==================== 备忘页面 (原有逻辑全部保留) ==================== */}
+          {/* ==================== 备忘页面 ==================== */}
           {activeTab === 'memo' && (
             <div className="h-full flex flex-col animate-in fade-in bg-[#f0f4f8]">
                <div className="px-6 py-5 bg-white shadow-sm z-10 shrink-0">
@@ -825,53 +992,142 @@ export default function App() {
           </div>
         )}
 
-        {/* 行程路线展示弹窗 */}
+        {/* ==================================================== */}
+        {/* 行程路线展示弹窗：分段交通与自由排序升级 */}
+        {/* ==================================================== */}
         {showRoutePanel && activeTripId && (
           <div className="fixed inset-0 z-[120] flex flex-col bg-white animate-in slide-in-from-bottom-full">
             <div className="px-6 py-5 flex items-center justify-between sticky top-0 bg-white/90 backdrop-blur z-20 border-b border-gray-50">
                <div>
                  <h2 className="text-xl font-bold">行程规划与地图</h2>
                </div>
-               <button onClick={() => setShowRoutePanel(false)} className="p-2 bg-gray-50 rounded-full"><X size={20}/></button>
+               <button onClick={() => {setShowRoutePanel(false);}} className="p-2 bg-gray-50 rounded-full"><X size={20}/></button>
             </div>
             <div className="flex-1 overflow-y-auto pb-10">
-              <div className="p-6 pb-2">
+              <div className="p-6 pb-2 space-y-6">
+                 
+                 {/* 地图：支持四种引擎的切换与重新渲染 */}
                  <RealMap 
-                   places={trips.find(t => t.id === activeTripId)?.places.map(pid => savedPlaces.find(p => p.id === pid)).filter(Boolean) || []} 
+                   places={tripPlaces} 
                    isRoute={true} 
                    mapStatus={mapStatus} 
                    currentCity={currentCity}
+                   routeMode={routeMode} 
                  />
+
+                 <div className="bg-gray-50 rounded-3xl p-5 border border-gray-100">
+                    <div className="flex justify-between items-center mb-5">
+                       <h3 className="font-bold text-slate-700 text-base">节点与交通详情</h3>
+                       <span className="text-[10px] bg-blue-100 text-blue-600 px-2 py-0.5 rounded font-bold">可调整顺序</span>
+                    </div>
+                    
+                    {/* 分段交通与时间轴展示 */}
+                    <div className="flex flex-col relative">
+                       {tripPlaces.map((p, i) => (
+                         <React.Fragment key={p.id + i}>
+                           {/* 节点气泡与内容 */}
+                           <div className="flex gap-4 items-start z-10 relative bg-transparent">
+                             <div className="w-7 h-7 rounded-full bg-blue-500 text-white flex items-center justify-center text-xs font-bold shrink-0 shadow-md relative z-10 mt-1">
+                               {i + 1}
+                             </div>
+                             <div className="flex-1 pb-2">
+                               <div className="font-bold text-sm text-slate-800">{safeStr(p.name)}</div>
+                               <div className="text-[11px] text-slate-500 mt-1 flex items-start gap-1">
+                                  <MapPin size={12} className="shrink-0 mt-0.5" />
+                                  {safeStr(p.address) || safeStr(p.district) || '暂无详细地址'}
+                               </div>
+                             </div>
+                             {/* 自定义顺序调节按钮 */}
+                             <div className="flex flex-col gap-1 shrink-0 ml-2">
+                               <button disabled={i===0} onClick={() => movePlace(i, 'up')} className="p-1 text-slate-400 hover:text-blue-500 disabled:opacity-20 active:scale-90 transition-all"><ChevronUp size={16}/></button>
+                               <button disabled={i===tripPlaces.length-1} onClick={() => movePlace(i, 'down')} className="p-1 text-slate-400 hover:text-blue-500 disabled:opacity-20 active:scale-90 transition-all"><ChevronDown size={16}/></button>
+                             </div>
+                           </div>
+                           
+                           {/* 节点之间的交通情况 */}
+                           {i < tripPlaces.length - 1 && (
+                             <div className="ml-[13px] border-l-[2px] border-dashed border-blue-200 pl-6 py-4 my-0.5 relative">
+                               <div className="absolute -left-[11px] top-1/2 -translate-y-1/2 bg-white rounded-full p-1 text-blue-400 border border-blue-100 shadow-sm">
+                                  {routeMode === 'driving' ? <Car size={12} /> : routeMode === 'transit' ? <Bus size={12}/> : routeMode === 'walking' ? <Footprints size={12}/> : <Bike size={12}/>}
+                               </div>
+                               {isCalculatingSegments ? (
+                                 <span className="text-[10px] text-slate-400 font-medium tracking-widest animate-pulse">路线规划中...</span>
+                               ) : segmentRoutes[i] ? (
+                                 <div className="inline-flex items-center gap-2 bg-blue-50/80 px-2.5 py-1.5 rounded-lg border border-blue-100 text-[10px] text-blue-600 font-bold shadow-sm">
+                                   <span>{routeMode === 'driving' ? '驾车' : routeMode === 'transit' ? '公交地铁' : routeMode === 'walking' ? '步行' : '骑行'}</span>
+                                   <span className="opacity-40">|</span> 
+                                   <span>{(segmentRoutes[i].distance/1000).toFixed(1)}公里</span> 
+                                   <span className="opacity-40">|</span> 
+                                   <span>{Math.round(segmentRoutes[i].time/60)}分钟</span>
+                                 </div>
+                               ) : null}
+                             </div>
+                           )}
+                         </React.Fragment>
+                       ))}
+                    </div>
+
+                    {/* 交通推荐底部合计与模式切换 */}
+                    {segmentRoutes.length > 0 && !isCalculatingSegments && (
+                      <div className="mt-6 p-4 bg-white rounded-2xl shadow-sm border border-blue-50">
+                         <div className="flex gap-2 mb-5 overflow-x-auto hide-scrollbar pb-1">
+                            <button onClick={() => setRouteMode('driving')} className={`shrink-0 px-4 py-2 rounded-full text-xs font-bold transition-all ${routeMode === 'driving' ? 'bg-blue-500 text-white shadow-md shadow-blue-200' : 'bg-gray-50 text-slate-500 border border-gray-100'}`}>🚗 驾车</button>
+                            <button onClick={() => setRouteMode('transit')} className={`shrink-0 px-4 py-2 rounded-full text-xs font-bold transition-all ${routeMode === 'transit' ? 'bg-indigo-500 text-white shadow-md shadow-indigo-200' : 'bg-gray-50 text-slate-500 border border-gray-100'}`}>🚌 公交地铁</button>
+                            <button onClick={() => setRouteMode('riding')} className={`shrink-0 px-4 py-2 rounded-full text-xs font-bold transition-all ${routeMode === 'riding' ? 'bg-orange-500 text-white shadow-md shadow-orange-200' : 'bg-gray-50 text-slate-500 border border-gray-100'}`}>🚴 骑行</button>
+                            <button onClick={() => setRouteMode('walking')} className={`shrink-0 px-4 py-2 rounded-full text-xs font-bold transition-all ${routeMode === 'walking' ? 'bg-green-500 text-white shadow-md shadow-green-200' : 'bg-gray-50 text-slate-500 border border-gray-100'}`}>🚶‍♂️ 步行</button>
+                         </div>
+                         <div className="flex items-center gap-2 mb-3">
+                            <Navigation size={16} className={routeMode === 'driving' ? 'text-blue-600' : routeMode === 'walking' ? 'text-green-600' : routeMode === 'transit' ? 'text-indigo-600' : 'text-orange-600'} />
+                            <span className={`font-bold text-sm ${routeMode === 'driving' ? 'text-blue-600' : routeMode === 'walking' ? 'text-green-600' : routeMode === 'transit' ? 'text-indigo-600' : 'text-orange-600'}`}>
+                              总计行程评估 ({routeMode === 'driving' ? '驾车' : routeMode === 'walking' ? '步行' : routeMode === 'transit' ? '公交地铁' : '骑行'})
+                            </span>
+                         </div>
+                         <div className="flex justify-between items-center text-slate-600 bg-gray-50 rounded-xl p-3">
+                            <div>
+                               <p className="text-[10px] text-slate-400 mb-0.5">总计路程</p>
+                               <p className="font-black text-lg">{(totalDist / 1000).toFixed(1)} <span className="text-xs font-medium text-slate-500">公里</span></p>
+                            </div>
+                            <div className="h-8 w-px bg-gray-200"></div>
+                            <div className="text-right">
+                               <p className="text-[10px] text-slate-400 mb-0.5">预估总时长</p>
+                               <p className={`font-black text-lg ${routeMode === 'driving' ? 'text-blue-500' : routeMode === 'walking' ? 'text-green-500' : routeMode === 'transit' ? 'text-indigo-500' : 'text-orange-500'}`}>
+                                  {Math.round(totalTime / 60)} <span className="text-xs font-medium text-slate-500">分钟</span>
+                               </p>
+                            </div>
+                         </div>
+                      </div>
+                    )}
+                 </div>
               </div>
             </div>
           </div>
         )}
 
-        {/* 收藏详情弹窗 (需求4：点击地图点弹出的详情) */}
+        {/* 收藏详情弹窗 (轻量级悬浮卡片) */}
         {selectedPlace && (
-          <div className="fixed inset-0 z-[100] flex items-end bg-black/40 backdrop-blur-sm animate-in fade-in">
-            <div className="bg-white w-full rounded-t-3xl p-6 pb-safe animate-in slide-in-from-bottom-full max-h-[85vh] overflow-y-auto">
-               <div className="flex justify-between items-start mb-4">
-                  <h3 className="text-xl font-bold pr-4 leading-tight">{safeStr(selectedPlace.name)}</h3>
-                  <button onClick={() => setSelectedPlace(null)} className="shrink-0 bg-gray-50 p-2 rounded-full"><X size={20}/></button>
-               </div>
-               <p className="text-xs text-slate-400 mb-6 flex items-start gap-1">
-                 <MapPin size={14} className="shrink-0 mt-0.5" /> 
-                 {safeStr(selectedPlace.district)} {safeStr(selectedPlace.address)}
-               </p>
-
-               <button 
-                onClick={() => handleSavePlace(selectedPlace, false)} 
-                className="w-full py-4 rounded-2xl text-white font-bold shadow-lg active:scale-95 transition-transform flex items-center justify-center gap-2"
-                style={{ backgroundColor: COLORS.primary }}
-               >
-                 <Heart size={18} /> 加入收藏夹
-               </button>
+          <div className="fixed bottom-24 left-6 right-6 z-[100] bg-white/95 backdrop-blur-xl rounded-3xl p-5 shadow-2xl border border-white/50 animate-in slide-in-from-bottom-8 flex items-center justify-between">
+            <div className="flex-1 min-w-0 pr-4">
+              <h3 className="text-base font-bold text-slate-800 truncate">{safeStr(selectedPlace.name)}</h3>
+              <p className="text-[11px] text-slate-500 truncate flex items-center gap-1 mt-1">
+                <MapPin size={12} className="shrink-0" /> {safeStr(selectedPlace.district)} {safeStr(selectedPlace.address)}
+              </p>
             </div>
+            
+            <button
+              onClick={() => handleSavePlace(selectedPlace, false)} 
+              className="shrink-0 w-12 h-12 rounded-full flex items-center justify-center text-white shadow-lg active:scale-95 transition-transform"
+              style={{ backgroundColor: COLORS.primary }}
+            >
+              <Heart size={20} className="fill-white" />
+            </button>
+            
+            <button onClick={() => setSelectedPlace(null)} className="absolute -top-3 -right-3 bg-white text-slate-400 hover:text-slate-600 p-1.5 rounded-full shadow-md border border-gray-100">
+              <X size={14}/>
+            </button>
           </div>
         )}
 
-        {/* 需求2：收藏夹起点规划浮层 */}
+        {/* 收藏夹起点规划周边浮层 */}
         {routeBuilderStart && (
           <div className="fixed inset-0 z-[150] flex items-end bg-black/40 backdrop-blur-sm animate-in fade-in">
              <div className="bg-white w-full rounded-t-3xl p-6 pb-safe animate-in slide-in-from-bottom-full">
