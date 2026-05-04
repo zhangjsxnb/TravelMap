@@ -16,8 +16,8 @@ const AMAP_CONFIG = {
 };
 
 const SUPABASE_CONFIG = {
-  url: '', // 👉 填入: 'https://ncbzklntlyiqvpmezpnk.supabase.co'
-  key: '', // 👉 填入: 'sb_publishable_OsNM8K_bgwUQhGosWMrCfA_Lt4k93DL'
+  url: 'https://ncbzklntlyiqvpmezpnk.supabase.co', // 👉 填入: 'https://ncbzklntlyiqvpmezpnk.supabase.co'
+  key: 'sb_publishable_OsNM8K_bgwUQhGosWMrCfA_Lt4k93DL', // 👉 填入: 'sb_publishable_OsNM8K_bgwUQhGosWMrCfA_Lt4k93DL'
 };
 
 const COLORS = {
