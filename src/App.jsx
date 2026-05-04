@@ -16,8 +16,8 @@ const AMAP_CONFIG = {
 };
 
 const SUPABASE_CONFIG = {
-  url: '', // 👉 填入: 'https://ncbzklntlyiqvpmezpnk.supabase.co'
-  key: '', // 👉 填入: 'sb_publishable_OsNM8K_bgwUQhGosWMrCfA_Lt4k93DL'
+  url: '', // 👉 填入: 'https://ncbzk...supabase.co'
+  key: '', // 👉 填入: 'sb_publishable_...'
 };
 
 const COLORS = {
@@ -140,7 +140,11 @@ const RealMap = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, current
                 let searcher;
                 if (routeMode === 'walking' && window.AMap.Walking) searcher = new window.AMap.Walking({ map, hideMarkers: true });
                 else if (routeMode === 'riding' && window.AMap.Riding) searcher = new window.AMap.Riding({ map, hideMarkers: true });
-                else if (routeMode === 'transit' && window.AMap.Transfer) searcher = new window.AMap.Transfer({ map, hideMarkers: true, city: currentCity });
+                else if (routeMode === 'transit' && window.AMap.Transfer) {
+                  // 防止全国导致引擎报错，回退到北京或当前城市
+                  const safeCity = currentCity === '全国' ? '北京' : currentCity;
+                  searcher = new window.AMap.Transfer({ map, hideMarkers: true, city: safeCity });
+                }
                 
                 if (searcher) {
                   try {
@@ -213,7 +217,7 @@ export default function App() {
   
   // 交通相关状态
   const [routeMode, setRouteMode] = useState('driving'); 
-  const [segmentRoutes, setSegmentRoutes] = useState([]); // 保存分段的具体距离和时间
+  const [segmentRoutes, setSegmentRoutes] = useState([]); 
   const [isCalculatingSegments, setIsCalculatingSegments] = useState(false);
 
   const autoComplete = useRef(null);
@@ -229,7 +233,7 @@ export default function App() {
       } else if (!document.getElementById('amap-script')) {
         const mapScript = document.createElement('script');
         mapScript.id = 'amap-script';
-        mapScript.crossOrigin = 'anonymous';
+        // 移除 crossOrigin='anonymous' 避免引起底层的 Script Error
         window._amapInitCallback = () => {
           if (window.AMap) {
              setMapStatus('success');
@@ -252,7 +256,6 @@ export default function App() {
              setMapErrorMsg('脚本加载成功但 AMap 对象不存在');
           }
         };
-        // 加入了 Transfer 插件以支持公交/地铁查询
         mapScript.src = `https://webapi.amap.com/maps?v=2.0&key=${AMAP_CONFIG.key}&plugin=AMap.AutoComplete,AMap.PlaceSearch,AMap.GeometryUtil,AMap.Driving,AMap.Walking,AMap.Riding,AMap.Transfer,AMap.Geolocation&callback=_amapInitCallback`;
         mapScript.async = true;
         mapScript.onerror = () => {
@@ -282,8 +285,8 @@ export default function App() {
       } else if (!document.getElementById('supabase-script')) {
         const supaScript = document.createElement('script');
         supaScript.id = 'supabase-script';
-        supaScript.src = 'https://unpkg.com/@supabase/supabase-js@2';
-        supaScript.crossOrigin = 'anonymous';
+        // 更换为更稳定的 CDN 加速节点，并移除引发报错的 crossOrigin
+        supaScript.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
         supaScript.async = true;
         supaScript.onload = () => {
           if (window.supabase) initSupa(window.supabase);
@@ -363,7 +366,10 @@ export default function App() {
            try {
              if (routeMode === 'walking' && window.AMap.Walking) searcher = new window.AMap.Walking();
              else if (routeMode === 'riding' && window.AMap.Riding) searcher = new window.AMap.Riding();
-             else if (routeMode === 'transit' && window.AMap.Transfer) searcher = new window.AMap.Transfer({ city: currentCity });
+             else if (routeMode === 'transit' && window.AMap.Transfer) {
+               const safeCity = currentCity === '全国' ? '北京' : currentCity;
+               searcher = new window.AMap.Transfer({ city: safeCity });
+             }
              else if (window.AMap.Driving) searcher = new window.AMap.Driving();
   
              if (searcher) {
