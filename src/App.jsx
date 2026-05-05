@@ -52,8 +52,8 @@ const AMAP_CONFIG = {
 };
 
 const SUPABASE_CONFIG = {
-  url: '', // 👉 必填：请填入您的 Supabase URL
-  key: '', // 👉 必填：请填入您的 Supabase anon key
+  url: 'https://ncbzklntlyiqvpmezpnk.supabase.co', // 👉 填入: 'https://ncbzklntlyiqvpmezpnk.supabase.co'
+  key: 'sb_publishable_OsNM8K_bgwUQhGosWMrCfA_Lt4k93DL', // 👉 填入: 'sb_publishable_OsNM8K_bgwUQhGosWMrCfA_Lt4k93DL'
 };
 
 const DEEPSEEK_API_KEY = '`sk-184f5a31a8e841a5abb427a82481a763`'; // 👉 必填：请填入您的 DeepSeek API 密钥 (sk-...)
@@ -157,27 +157,32 @@ const RealMap = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, current
           const path = places.map(p => getLngLat(p.location)).filter(Boolean);
 
           if (path.length >= 2) {
-            // 采用分段规划以支持混编交通方式
-            path.forEach((start, i) => {
-              if (i === path.length - 1) return;
-              const end = path[i+1];
-              let searcher;
-              const currentMode = routeModes[i] || 'driving';
-
-              if (currentMode === 'walking' && window.AMap.Walking) searcher = new window.AMap.Walking({ map, hideMarkers: true });
-              else if (currentMode === 'riding' && window.AMap.Riding) searcher = new window.AMap.Riding({ map, hideMarkers: true });
-              else if (currentMode === 'transit' && window.AMap.Transfer) {
-                const safeCity = currentCity === '全国' ? '北京' : currentCity;
-                searcher = new window.AMap.Transfer({ map, hideMarkers: true, city: safeCity });
-              }
-              else if (currentMode === 'driving' && window.AMap.Driving) {
-                searcher = new window.AMap.Driving({ map, hideMarkers: true });
-              }
-              
-              if (searcher) {
-                try { searcher.search(start, end); } catch(err) { console.error('Route error:', err); }
-              }
-            });
+            if (routeMode === 'driving' && window.AMap.Driving) {
+              const driving = new window.AMap.Driving({ map, hideMarkers: true });
+              driving.search(path[0], path[path.length - 1], { waypoints: path.slice(1, -1) });
+            } else {
+              // 步行、骑行、公交由于 API 限制不支持多途经点一次性绘制，采取分段绘制连线
+              path.forEach((start, i) => {
+                if (i === path.length - 1) return;
+                const end = path[i+1];
+                let searcher;
+                if (routeMode === 'walking' && window.AMap.Walking) searcher = new window.AMap.Walking({ map, hideMarkers: true });
+                else if (routeMode === 'riding' && window.AMap.Riding) searcher = new window.AMap.Riding({ map, hideMarkers: true });
+                else if (routeMode === 'transit' && window.AMap.Transfer) {
+                  // 防止全国导致引擎报错，回退到北京或当前城市
+                  const safeCity = currentCity === '全国' ? '北京' : currentCity;
+                  searcher = new window.AMap.Transfer({ map, hideMarkers: true, city: safeCity });
+                }
+                
+                if (searcher) {
+                  try {
+                    searcher.search(start, end);
+                  } catch(err) {
+                    console.error('Route segment search error:', err);
+                  }
+                }
+              });
+            }
           }
         } else if (places.length > 0 && !isRoute) {
           map.setFitView();
@@ -265,20 +270,13 @@ export default function App() {
   const [newTripModalVisible, setNewTripModalVisible] = useState(false);
   const [newTripName, setNewTripName] = useState('');
   
-  // 分段交通方式配置
-  const [segmentModes, setSegmentModes] = useState([]); 
+  // 交通相关状态
+  const [routeMode, setRouteMode] = useState('driving'); 
   const [segmentRoutes, setSegmentRoutes] = useState([]); 
   const [isCalculatingSegments, setIsCalculatingSegments] = useState(false);
 
   const autoComplete = useRef(null);
 
-  // --- 本地缓存备份 (无论是否登录都执行) ---
-  useEffect(() => { localStorage.setItem('travel_saved_places', JSON.stringify(savedPlaces)); }, [savedPlaces]);
-  useEffect(() => { localStorage.setItem('travel_trips', JSON.stringify(trips)); }, [trips]);
-  useEffect(() => { localStorage.setItem('travel_memos', JSON.stringify(globalMemos)); }, [globalMemos]);
-  useEffect(() => { localStorage.setItem('travel_memo_template', JSON.stringify(memoTemplate)); }, [memoTemplate]);
-
-  // --- 云端数据同步：账号登录后拉取数据 ---
   useEffect(() => {
     if (user && !user.is_anonymous && supabase) {
       const fetchCloudData = async () => {
@@ -406,106 +404,14 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [searchQuery, mapStatus, currentCity, aiSearchMode]);
 
-  // ==========================================
-  // AI 核心调用逻辑 (DeepSeek)
-  // ==========================================
-  const callDeepSeek = async (prompt) => {
-    if (!DEEPSEEK_API_KEY) {
-      alert("请先在代码顶部配置 DEEPSEEK_API_KEY");
-      return null;
-    }
-    try {
-      const res = await fetch('https://api.deepseek.com/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
-        },
-        body: JSON.stringify({
-          model: 'deepseek-chat',
-          messages: [{ role: 'user', content: prompt }],
-          temperature: 0.3
-        })
-      });
-      const data = await res.json();
-      return data.choices[0].message.content.trim();
-    } catch (e) {
-      console.error("DeepSeek API Error:", e);
-      alert("AI 调用失败，请检查网络或密钥");
-      return null;
-    }
-  };
-
-  const handleAISearch = async () => {
-    if (!searchQuery.trim() || !window.AMap?.AutoComplete) return;
-    setIsAILoading(true);
-
-    const prompt = `用户想在地图上找：“${searchQuery}”。请提炼成高德地图可以直接搜索的精准POI关键词（比如用户说“适合发呆看书的地方”，你返回“安静咖啡馆 书店”）。只需返回核心短语，用空格隔开，不要任何标点符号、解释或废话。`;
-    const keywords = await callDeepSeek(prompt);
-
-    if (keywords) {
-      // 拿到关键词后，调用高德搜索
-      const autoOptions = currentCity !== '全国' ? { city: currentCity, citylimit: true } : { city: '全国' };
-      if (!autoComplete.current) {
-         autoComplete.current = new window.AMap.AutoComplete(autoOptions);
-      } else {
-         autoComplete.current.setCity(currentCity !== '全国' ? currentCity : '全国');
-         autoComplete.current.setCityLimit(currentCity !== '全国');
-      }
-
-      autoComplete.current.search(keywords, (status, result) => {
-        if (status === 'complete' && result?.tips) {
-          setSearchResults(result.tips.filter(item => item && item.location));
-        } else {
-          setSearchResults([]);
-        }
-        setIsAILoading(false);
-      });
-    } else {
-      setIsAILoading(false);
-    }
-  };
-
-  const handleGenerateAIMemo = async () => {
-    if (!aiMemoTopic.trim()) return;
-    setIsAILoading(true);
-    const prompt = `你要为“${aiMemoTopic}”生成一份必备行李/备忘清单。请返回一个纯 JSON 格式的字符串数组（长度5-8项），例如 ["防晒霜", "充电宝", "墨镜"]。不要输出其他任何解释性文字。`;
-    const resultText = await callDeepSeek(prompt);
-
-    if (resultText) {
-      try {
-        // 清理可能的 markdown 标记
-        const cleanText = resultText.replace(/```json/g, '').replace(/```/g, '').trim();
-        const items = JSON.parse(cleanText);
-
-        if (Array.isArray(items)) {
-          const newMemos = items.map(text => ({
-            id: Date.now().toString() + '_' + Math.random().toString(36).substring(2, 9),
-            text,
-            done: false
-          }));
-          setGlobalMemos(prev => [...newMemos, ...prev]);
-
-          if (user && !user.is_anonymous && supabase) {
-            const cloudMemos = newMemos.map(m => ({ ...m, user_id: user.id }));
-            try { await supabase.from('memos').insert(cloudMemos); } catch(e){}
-          }
-          setAiMemoModalVisible(false);
-          setAiMemoTopic('');
-        }
-      } catch (e) {
-        console.error("JSON 解析失败:", e, resultText);
-        alert("AI 格式返回异常，请重试");
-      }
-    }
-    setIsAILoading(false);
-  };
-
+  // 获取当前正在浏览的行程包含的地点数组
   const tripPlaces = showRoutePanel && activeTripId 
     ? (trips.find(t => t.id === activeTripId)?.places.map(pid => savedPlaces.find(p => p.id === pid)).filter(Boolean) || [])
     : [];
 
-  // 获取分段路线详情（独立计算每一段的出行方式）
+  // ==========================================
+  // 核心：分段路径的时间和距离计算
+  // ==========================================
   useEffect(() => {
     if (!window.AMap || tripPlaces.length < 2 || !showRoutePanel) {
       setSegmentRoutes([]);
@@ -659,92 +565,8 @@ export default function App() {
       }
       return trip;
     }));
-
-    if (user && !user.is_anonymous && supabase && updatedPlaces.length > 0) {
-      try { await supabase.from('trips').update({ places: updatedPlaces }).eq('id', activeTripId); } catch(e){}
-    }
   };
 
-  const handleAddMemo = async () => {
-    if (newMemoText.trim()) {
-      const newMemo = { id: Date.now().toString(), text: newMemoText.trim(), done: false };
-      setGlobalMemos(prev => [newMemo, ...prev]);
-      setNewMemoText('');
-      
-      if (user && !user.is_anonymous && supabase) {
-        try { await supabase.from('memos').upsert({ ...newMemo, user_id: user.id }); } catch(e){}
-      }
-    }
-  };
-
-  const toggleMemo = async (id, currentDone) => {
-    setGlobalMemos(prev => prev.map(m => m.id === id ? { ...m, done: !currentDone } : m));
-    if (user && !user.is_anonymous && supabase) {
-      try { await supabase.from('memos').update({ done: !currentDone }).eq('id', id); } catch(e){}
-    }
-  };
-
-  const handleDeleteMemo = async (id) => {
-    setGlobalMemos(prev => prev.filter(m => m.id !== id));
-    if (user && !user.is_anonymous && supabase) {
-      try { await supabase.from('memos').delete().eq('id', id); } catch(e){}
-    }
-  };
-
-  // 备忘录增强：一键添加常用
-  const handleAddFromTemplate = async () => {
-    // 过滤掉当前已经存在且未打勾的项，避免重复添加
-    const itemsToAdd = memoTemplate.filter(t => !globalMemos.some(m => m.text === t && !m.done));
-    if (itemsToAdd.length === 0) return;
-
-    const newMemos = itemsToAdd.map(text => ({
-      id: Date.now().toString() + '_' + Math.random().toString(36).substring(2, 9),
-      text,
-      done: false
-    }));
-
-    setGlobalMemos(prev => [...newMemos, ...prev]);
-
-    if (user && !user.is_anonymous && supabase) {
-      const cloudMemos = newMemos.map(m => ({ ...m, user_id: user.id }));
-      try { await supabase.from('memos').insert(cloudMemos); } catch(e){}
-    }
-  };
-
-  // 备忘录增强：一键清除已完成
-  const handleClearDone = async () => {
-    const idsToDelete = globalMemos.filter(m => m.done).map(m => m.id);
-    if (idsToDelete.length === 0) return;
-
-    setGlobalMemos(prev => prev.filter(m => !m.done));
-
-    if (user && !user.is_anonymous && supabase) {
-      try { await supabase.from('memos').delete().in('id', idsToDelete); } catch(e){}
-    }
-  };
-
-  // 备忘录编辑功能
-  const startEditingMemo = (m) => {
-    setEditingMemoId(m.id);
-    setEditingMemoText(m.text);
-  };
-
-  const saveEditingMemo = async () => {
-    if (!editingMemoText.trim() || !editingMemoId) {
-       setEditingMemoId(null);
-       return;
-    }
-    setGlobalMemos(prev => prev.map(m => m.id === editingMemoId ? { ...m, text: editingMemoText.trim() } : m));
-    if (user && !user.is_anonymous && supabase) {
-      try { await supabase.from('memos').update({ text: editingMemoText.trim() }).eq('id', editingMemoId); } catch(e){}
-    }
-    setEditingMemoId(null);
-    setEditingMemoText('');
-  };
-
-  // ==========================================
-  // Auth 及其他操作
-  // ==========================================
   const handleSendOtp = async () => {
     if (!supabase) return setAuthMessage('请先在顶部配置正确的 Supabase 密钥');
     if (!email) return setAuthMessage('请输入邮箱地址');
@@ -1177,40 +999,18 @@ export default function App() {
                   ) : (
                     globalMemos.map(m => (
                       <div key={m.id} className="bg-white p-4 rounded-2xl shadow-sm flex items-center justify-between border border-gray-50 transition-transform">
-                         {editingMemoId === m.id ? (
-                            <div className="flex-1 flex items-center gap-2 mr-2">
-                               <input
-                                 autoFocus
-                                 value={editingMemoText}
-                                 onChange={e => setEditingMemoText(e.target.value)}
-                                 onBlur={saveEditingMemo}
-                                 onKeyDown={e => e.key === 'Enter' && saveEditingMemo()}
-                                 className="flex-1 px-3 py-1.5 text-sm bg-gray-50 rounded-lg outline-none focus:ring-2 focus:ring-blue-200 border border-blue-100"
-                               />
-                               <button onMouseDown={(e) => { e.preventDefault(); saveEditingMemo(); }} className="p-1.5 bg-blue-100 text-blue-600 rounded-lg active:scale-95"><CornerDownLeft size={16}/></button>
-                            </div>
-                         ) : (
-                            <div className="flex items-center gap-3 cursor-pointer flex-1" onClick={() => { toggleMemo(m.id, m.done); }}>
-                               {m.done ? <CheckCircle2 size={20} color={COLORS.primary}/> : <Circle size={20} color={COLORS.textLight}/>}
-                               <span className={`text-sm font-medium ${m.done ? 'line-through text-slate-300' : 'text-slate-700'}`}>{safeStr(m.text)}</span>
-                            </div>
-                         )}
-                         {editingMemoId !== m.id && (
-                           <div className="flex items-center gap-1 shrink-0 ml-2">
-                             <button
-                               onClick={() => startEditingMemo(m)}
-                               className="p-2 text-gray-300 hover:text-blue-500 active:scale-95 transition-all rounded-full hover:bg-blue-50"
-                             >
-                               <Edit2 size={16} />
-                             </button>
-                             <button 
-                               onClick={() => handleDeleteMemo(m.id)} 
-                               className="p-2 text-gray-300 hover:text-red-400 active:scale-95 transition-all rounded-full hover:bg-red-50"
-                             >
-                               <Trash2 size={16} />
-                             </button>
-                           </div>
-                         )}
+                         <div className="flex items-center gap-3 cursor-pointer flex-1" onClick={() => {
+                             setGlobalMemos(globalMemos.map(g => g.id === m.id ? {...g, done: !g.done} : g));
+                         }}>
+                            {m.done ? <CheckCircle2 size={20} color={COLORS.primary}/> : <Circle size={20} color={COLORS.textLight}/>}
+                            <span className={`text-sm font-medium ${m.done ? 'line-through text-slate-300' : 'text-slate-700'}`}>{safeStr(m.text)}</span>
+                         </div>
+                         <button 
+                           onClick={() => handleDeleteMemo(m.id)} 
+                           className="p-2 ml-2 text-gray-300 hover:text-red-400 active:scale-95 transition-all rounded-full hover:bg-red-50"
+                         >
+                           <Trash2 size={16} />
+                         </button>
                       </div>
                     ))
                   )}
@@ -1374,7 +1174,7 @@ export default function App() {
             <div className="flex-1 overflow-y-auto pb-10 min-h-0">
               <div className="p-6 pb-2 space-y-6">
                  
-                 {/* 传递独立分段交通方式给地图 */}
+                 {/* 地图：支持四种引擎的切换与重新渲染 */}
                  <RealMap 
                    places={tripPlaces} 
                    isRoute={true} 
@@ -1409,7 +1209,7 @@ export default function App() {
                              </div>
                            </div>
                            
-                           {/* 分段交通方式配置区（核心修复点2） */}
+                           {/* 节点之间的交通情况 */}
                            {i < tripPlaces.length - 1 && (
                              <div className="ml-[13px] border-l-[2px] border-dashed border-blue-200 pl-6 py-4 my-0.5 relative">
                                <div className="absolute -left-[11px] top-1/2 -translate-y-1/2 bg-white rounded-full p-1 text-blue-400 border border-blue-100 shadow-sm">
