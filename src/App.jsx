@@ -56,7 +56,7 @@ const SUPABASE_CONFIG = {
   key: 'sb_publishable_OsNM8K_bgwUQhGosWMrCfA_Lt4k93DL', // 👉 必填：请填入您的 Supabase anon key
 };
 
-const DEEPSEEK_API_KEY = '`sk-184f5a31a8e841a5abb427a82481a763`'; // 👉 必填：请填入您的 DeepSeek API 密钥 (sk-...)
+const DEEPSEEK_API_KEY = 'sk-184f5a31a8e841a5abb427a82481a763'; // 👉 必填：请填入您的 DeepSeek API 密钥 (sk-...)
 
 const COLORS = {
   white: '#FFFFFF',
