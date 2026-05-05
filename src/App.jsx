@@ -4,7 +4,8 @@ import {
   Navigation, Calendar, CheckCircle2, Circle, 
   ChevronRight, ArrowRight, X, Sparkles, Trash2, ClipboardList,
   Mail, KeyRound, Loader2, LogOut, AlertCircle, ChevronDown, ChevronLeft, LocateFixed,
-  Star, ChevronUp, Car, Bus, Footprints, Bike
+  Star, ChevronUp, Car, Bus, Footprints, Bike, Settings,
+  Wand2, Edit2, CornerDownLeft
 } from 'lucide-react';
 
 // ==========================================
@@ -51,9 +52,11 @@ const AMAP_CONFIG = {
 };
 
 const SUPABASE_CONFIG = {
-  url: 'https://ncbzklntlyiqvpmezpnk.supabase.co', // 👉 必填：请填入您的 Supabase URL
-  key: 'sb_publishable_OsNM8K_bgwUQhGosWMrCfA_Lt4k93DL', // 👉 必填：请填入您的 Supabase anon key
+  url: '', // 👉 必填：请填入您的 Supabase URL
+  key: '', // 👉 必填：请填入您的 Supabase anon key
 };
+
+const DEEPSEEK_API_KEY = '`sk-184f5a31a8e841a5abb427a82481a763`'; // 👉 必填：请填入您的 DeepSeek API 密钥 (sk-...)
 
 const COLORS = {
   white: '#FFFFFF',
@@ -93,7 +96,7 @@ const getLngLat = (loc) => {
 // ==========================================
 // 地图核心组件
 // ==========================================
-const RealMap = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, currentCity, onMarkerClick, routeMode = 'driving' }) => {
+const RealMap = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, currentCity, onMarkerClick, routeModes = [] }) => {
   const containerRef = useRef(null);
   const mapInstance = useRef(null);
   const prevCityRef = useRef(currentCity);
@@ -154,26 +157,27 @@ const RealMap = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, current
           const path = places.map(p => getLngLat(p.location)).filter(Boolean);
 
           if (path.length >= 2) {
-            if (routeMode === 'driving' && window.AMap.Driving) {
-              const driving = new window.AMap.Driving({ map, hideMarkers: true });
-              driving.search(path[0], path[path.length - 1], { waypoints: path.slice(1, -1) });
-            } else {
-              path.forEach((start, i) => {
-                if (i === path.length - 1) return;
-                const end = path[i+1];
-                let searcher;
-                if (routeMode === 'walking' && window.AMap.Walking) searcher = new window.AMap.Walking({ map, hideMarkers: true });
-                else if (routeMode === 'riding' && window.AMap.Riding) searcher = new window.AMap.Riding({ map, hideMarkers: true });
-                else if (routeMode === 'transit' && window.AMap.Transfer) {
-                  const safeCity = currentCity === '全国' ? '北京' : currentCity;
-                  searcher = new window.AMap.Transfer({ map, hideMarkers: true, city: safeCity });
-                }
-                
-                if (searcher) {
-                  try { searcher.search(start, end); } catch(err) { console.error('Route error:', err); }
-                }
-              });
-            }
+            // 采用分段规划以支持混编交通方式
+            path.forEach((start, i) => {
+              if (i === path.length - 1) return;
+              const end = path[i+1];
+              let searcher;
+              const currentMode = routeModes[i] || 'driving';
+
+              if (currentMode === 'walking' && window.AMap.Walking) searcher = new window.AMap.Walking({ map, hideMarkers: true });
+              else if (currentMode === 'riding' && window.AMap.Riding) searcher = new window.AMap.Riding({ map, hideMarkers: true });
+              else if (currentMode === 'transit' && window.AMap.Transfer) {
+                const safeCity = currentCity === '全国' ? '北京' : currentCity;
+                searcher = new window.AMap.Transfer({ map, hideMarkers: true, city: safeCity });
+              }
+              else if (currentMode === 'driving' && window.AMap.Driving) {
+                searcher = new window.AMap.Driving({ map, hideMarkers: true });
+              }
+              
+              if (searcher) {
+                try { searcher.search(start, end); } catch(err) { console.error('Route error:', err); }
+              }
+            });
           }
         } else if (places.length > 0 && !isRoute) {
           map.setFitView();
@@ -182,7 +186,7 @@ const RealMap = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, current
         console.error("Map rendering error:", err);
       }
     }
-  }, [places, isRoute, mapStatus, currentCity, onMarkerClick, routeMode]);
+  }, [places, isRoute, mapStatus, currentCity, onMarkerClick, routeModes]);
 
   if (mapStatus === 'loading') return <div className="w-full aspect-square bg-blue-50 rounded-3xl flex items-center justify-center text-blue-300 shadow-inner mb-6"><Loader2 className="animate-spin" /></div>;
   if (mapStatus === 'no-key') return <div className="w-full aspect-square bg-gray-50 border-2 border-dashed border-gray-200 rounded-3xl flex flex-col items-center justify-center p-6 text-center shadow-inner mb-6"><MapIcon size={32} className="text-gray-300 mb-3" /><p className="text-sm font-bold text-gray-500 mb-1">尚未配置完整的地图 API</p></div>;
@@ -225,6 +229,14 @@ export default function App() {
   });
   const [newMemoText, setNewMemoText] = useState('');
   
+  // 备忘录常用模板配置
+  const [memoTemplate, setMemoTemplate] = useState(() => {
+    const local = localStorage.getItem('travel_memo_template');
+    return local ? JSON.parse(local) : ['身份证', '充电宝', '纸巾', '钥匙', '耳机'];
+  });
+  const [showMemoTemplateModal, setShowMemoTemplateModal] = useState(false);
+  const [newTemplateItem, setNewTemplateItem] = useState('');
+
   const [currentCity, setCurrentCity] = useState(localStorage.getItem('lastCity') || '全国');
   const [showCityPicker, setShowCityPicker] = useState(false);
   const [customCityInput, setCustomCityInput] = useState('');
@@ -233,6 +245,16 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [selectedPlace, setSelectedPlace] = useState(null);
+
+  // AI 增强状态
+  const [aiSearchMode, setAiSearchMode] = useState(false);
+  const [isAILoading, setIsAILoading] = useState(false);
+  
+  const [aiMemoModalVisible, setAiMemoModalVisible] = useState(false);
+  const [aiMemoTopic, setAiMemoTopic] = useState('');
+
+  const [editingMemoId, setEditingMemoId] = useState(null);
+  const [editingMemoText, setEditingMemoText] = useState('');
 
   const [favSearchQuery, setFavSearchQuery] = useState('');
   const [routeBuilderStart, setRouteBuilderStart] = useState(null);
@@ -243,7 +265,8 @@ export default function App() {
   const [newTripModalVisible, setNewTripModalVisible] = useState(false);
   const [newTripName, setNewTripName] = useState('');
   
-  const [routeMode, setRouteMode] = useState('driving'); 
+  // 分段交通方式配置
+  const [segmentModes, setSegmentModes] = useState([]); 
   const [segmentRoutes, setSegmentRoutes] = useState([]); 
   const [isCalculatingSegments, setIsCalculatingSegments] = useState(false);
 
@@ -253,6 +276,7 @@ export default function App() {
   useEffect(() => { localStorage.setItem('travel_saved_places', JSON.stringify(savedPlaces)); }, [savedPlaces]);
   useEffect(() => { localStorage.setItem('travel_trips', JSON.stringify(trips)); }, [trips]);
   useEffect(() => { localStorage.setItem('travel_memos', JSON.stringify(globalMemos)); }, [globalMemos]);
+  useEffect(() => { localStorage.setItem('travel_memo_template', JSON.stringify(memoTemplate)); }, [memoTemplate]);
 
   // --- 云端数据同步：账号登录后拉取数据 ---
   useEffect(() => {
@@ -350,6 +374,9 @@ export default function App() {
 
   useEffect(() => {
     const timer = setTimeout(() => {
+      // 如果开启了 AI 搜索模式，暂停常规的自动搜索，等待用户按回车
+      if (aiSearchMode) return;
+
       if (mapStatus === 'success' && searchQuery && window.AMap?.AutoComplete) {
         const autoOptions = currentCity !== '全国' ? { city: currentCity, citylimit: true } : { city: '全国' };
         
@@ -377,12 +404,108 @@ export default function App() {
       }
     }, 300);
     return () => clearTimeout(timer);
-  }, [searchQuery, mapStatus, currentCity]);
+  }, [searchQuery, mapStatus, currentCity, aiSearchMode]);
+
+  // ==========================================
+  // AI 核心调用逻辑 (DeepSeek)
+  // ==========================================
+  const callDeepSeek = async (prompt) => {
+    if (!DEEPSEEK_API_KEY) {
+      alert("请先在代码顶部配置 DEEPSEEK_API_KEY");
+      return null;
+    }
+    try {
+      const res = await fetch('https://api.deepseek.com/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: 'deepseek-chat',
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.3
+        })
+      });
+      const data = await res.json();
+      return data.choices[0].message.content.trim();
+    } catch (e) {
+      console.error("DeepSeek API Error:", e);
+      alert("AI 调用失败，请检查网络或密钥");
+      return null;
+    }
+  };
+
+  const handleAISearch = async () => {
+    if (!searchQuery.trim() || !window.AMap?.AutoComplete) return;
+    setIsAILoading(true);
+
+    const prompt = `用户想在地图上找：“${searchQuery}”。请提炼成高德地图可以直接搜索的精准POI关键词（比如用户说“适合发呆看书的地方”，你返回“安静咖啡馆 书店”）。只需返回核心短语，用空格隔开，不要任何标点符号、解释或废话。`;
+    const keywords = await callDeepSeek(prompt);
+
+    if (keywords) {
+      // 拿到关键词后，调用高德搜索
+      const autoOptions = currentCity !== '全国' ? { city: currentCity, citylimit: true } : { city: '全国' };
+      if (!autoComplete.current) {
+         autoComplete.current = new window.AMap.AutoComplete(autoOptions);
+      } else {
+         autoComplete.current.setCity(currentCity !== '全国' ? currentCity : '全国');
+         autoComplete.current.setCityLimit(currentCity !== '全国');
+      }
+
+      autoComplete.current.search(keywords, (status, result) => {
+        if (status === 'complete' && result?.tips) {
+          setSearchResults(result.tips.filter(item => item && item.location));
+        } else {
+          setSearchResults([]);
+        }
+        setIsAILoading(false);
+      });
+    } else {
+      setIsAILoading(false);
+    }
+  };
+
+  const handleGenerateAIMemo = async () => {
+    if (!aiMemoTopic.trim()) return;
+    setIsAILoading(true);
+    const prompt = `你要为“${aiMemoTopic}”生成一份必备行李/备忘清单。请返回一个纯 JSON 格式的字符串数组（长度5-8项），例如 ["防晒霜", "充电宝", "墨镜"]。不要输出其他任何解释性文字。`;
+    const resultText = await callDeepSeek(prompt);
+
+    if (resultText) {
+      try {
+        // 清理可能的 markdown 标记
+        const cleanText = resultText.replace(/```json/g, '').replace(/```/g, '').trim();
+        const items = JSON.parse(cleanText);
+
+        if (Array.isArray(items)) {
+          const newMemos = items.map(text => ({
+            id: Date.now().toString() + '_' + Math.random().toString(36).substring(2, 9),
+            text,
+            done: false
+          }));
+          setGlobalMemos(prev => [...newMemos, ...prev]);
+
+          if (user && !user.is_anonymous && supabase) {
+            const cloudMemos = newMemos.map(m => ({ ...m, user_id: user.id }));
+            try { await supabase.from('memos').insert(cloudMemos); } catch(e){}
+          }
+          setAiMemoModalVisible(false);
+          setAiMemoTopic('');
+        }
+      } catch (e) {
+        console.error("JSON 解析失败:", e, resultText);
+        alert("AI 格式返回异常，请重试");
+      }
+    }
+    setIsAILoading(false);
+  };
 
   const tripPlaces = showRoutePanel && activeTripId 
     ? (trips.find(t => t.id === activeTripId)?.places.map(pid => savedPlaces.find(p => p.id === pid)).filter(Boolean) || [])
     : [];
 
+  // 获取分段路线详情（独立计算每一段的出行方式）
   useEffect(() => {
     if (!window.AMap || tripPlaces.length < 2 || !showRoutePanel) {
       setSegmentRoutes([]);
@@ -399,6 +522,8 @@ export default function App() {
          const p2 = tripPlaces[i+1];
          const start = getLngLat(p1.location);
          const end = getLngLat(p2.location);
+         
+         const currentMode = segmentModes[i] || 'driving';
 
          if (!start || !end) {
            results.push({ distance: 0, time: 0 });
@@ -408,9 +533,9 @@ export default function App() {
          const res = await new Promise((resolve) => {
            let searcher;
            try {
-             if (routeMode === 'walking' && window.AMap.Walking) searcher = new window.AMap.Walking();
-             else if (routeMode === 'riding' && window.AMap.Riding) searcher = new window.AMap.Riding();
-             else if (routeMode === 'transit' && window.AMap.Transfer) {
+             if (currentMode === 'walking' && window.AMap.Walking) searcher = new window.AMap.Walking();
+             else if (currentMode === 'riding' && window.AMap.Riding) searcher = new window.AMap.Riding();
+             else if (currentMode === 'transit' && window.AMap.Transfer) {
                const safeCity = currentCity === '全国' ? '北京' : currentCity;
                searcher = new window.AMap.Transfer({ city: safeCity });
              }
@@ -421,7 +546,7 @@ export default function App() {
                   try {
                     if (status === 'complete') {
                        let distance = 0, time = 0;
-                       if (routeMode === 'transit' && result.plans && result.plans.length > 0) {
+                       if (currentMode === 'transit' && result.plans && result.plans.length > 0) {
                           distance = result.plans[0].distance;
                           time = result.plans[0].time;
                        } else if (result.routes && result.routes.length > 0) {
@@ -431,7 +556,7 @@ export default function App() {
                        resolve({ distance, time });
                     } else {
                        const dist = window.AMap.GeometryUtil.distance(start, end);
-                       const speed = routeMode === 'walking' ? 1.2 : routeMode === 'riding' ? 4 : 10;
+                       const speed = currentMode === 'walking' ? 1.2 : currentMode === 'riding' ? 4 : 10;
                        resolve({ distance: dist, time: dist / speed });
                     }
                   } catch(e) {
@@ -454,7 +579,20 @@ export default function App() {
     };
     fetchSegments();
     return () => { canceled = true; };
-  }, [tripPlaces.map(p=>p.id).join(','), routeMode, currentCity, mapStatus, showRoutePanel]);
+  }, [tripPlaces.map(p=>p.id).join(','), segmentModes, currentCity, mapStatus, showRoutePanel]);
+
+  const handleSegmentModeChange = (index, newMode) => {
+    setSegmentModes(prev => {
+      const next = [...prev];
+      next[index] = newMode;
+      return next;
+    });
+  };
+
+  const setAllSegmentModes = (mode) => {
+    const newModes = new Array(Math.max(0, tripPlaces.length - 1)).fill(mode);
+    setSegmentModes(newModes);
+  };
 
   // ==========================================
   // 云端同步写操作逻辑
@@ -551,6 +689,57 @@ export default function App() {
     if (user && !user.is_anonymous && supabase) {
       try { await supabase.from('memos').delete().eq('id', id); } catch(e){}
     }
+  };
+
+  // 备忘录增强：一键添加常用
+  const handleAddFromTemplate = async () => {
+    // 过滤掉当前已经存在且未打勾的项，避免重复添加
+    const itemsToAdd = memoTemplate.filter(t => !globalMemos.some(m => m.text === t && !m.done));
+    if (itemsToAdd.length === 0) return;
+
+    const newMemos = itemsToAdd.map(text => ({
+      id: Date.now().toString() + '_' + Math.random().toString(36).substring(2, 9),
+      text,
+      done: false
+    }));
+
+    setGlobalMemos(prev => [...newMemos, ...prev]);
+
+    if (user && !user.is_anonymous && supabase) {
+      const cloudMemos = newMemos.map(m => ({ ...m, user_id: user.id }));
+      try { await supabase.from('memos').insert(cloudMemos); } catch(e){}
+    }
+  };
+
+  // 备忘录增强：一键清除已完成
+  const handleClearDone = async () => {
+    const idsToDelete = globalMemos.filter(m => m.done).map(m => m.id);
+    if (idsToDelete.length === 0) return;
+
+    setGlobalMemos(prev => prev.filter(m => !m.done));
+
+    if (user && !user.is_anonymous && supabase) {
+      try { await supabase.from('memos').delete().in('id', idsToDelete); } catch(e){}
+    }
+  };
+
+  // 备忘录编辑功能
+  const startEditingMemo = (m) => {
+    setEditingMemoId(m.id);
+    setEditingMemoText(m.text);
+  };
+
+  const saveEditingMemo = async () => {
+    if (!editingMemoText.trim() || !editingMemoId) {
+       setEditingMemoId(null);
+       return;
+    }
+    setGlobalMemos(prev => prev.map(m => m.id === editingMemoId ? { ...m, text: editingMemoText.trim() } : m));
+    if (user && !user.is_anonymous && supabase) {
+      try { await supabase.from('memos').update({ text: editingMemoText.trim() }).eq('id', editingMemoId); } catch(e){}
+    }
+    setEditingMemoId(null);
+    setEditingMemoText('');
   };
 
   // ==========================================
@@ -729,16 +918,17 @@ export default function App() {
 
   return (
     <div className="min-h-[100dvh] w-full flex justify-center bg-gray-100 sm:bg-[#f0f4f8]">
-      <div className="w-full sm:max-w-md h-[100dvh] flex flex-col relative bg-white overflow-hidden shadow-2xl">
+      {/* 核心修复点1：给主容器外层加上 min-h-0，解决 Flex 子项高度溢出导致无法滚动的问题 */}
+      <div className="w-full sm:max-w-md h-[100dvh] flex flex-col relative bg-white overflow-hidden shadow-2xl min-h-0">
         
         <div className="absolute top-0 w-full h-40" style={{ background: `linear-gradient(to bottom, ${COLORS.bg}, white)` }}></div>
         <div className="h-12 shrink-0 pt-safe z-10"></div>
 
-        <div className="flex-1 relative z-10 flex flex-col overflow-hidden">
+        <div className="flex-1 relative z-10 flex flex-col overflow-hidden min-h-0">
           
           {/* ==================== 发现页面 ==================== */}
           {activeTab === 'map' && (
-            <div className="flex-1 flex flex-col animate-in fade-in">
+            <div className="flex-1 flex flex-col animate-in fade-in min-h-0">
               <div className="px-6 shrink-0">
                 {!isSearching && <h2 className="text-2xl font-bold mb-4" style={{ color: COLORS.textDark }}>发现地点</h2>}
                 
@@ -760,19 +950,32 @@ export default function App() {
                   <div className="flex-1 relative transition-all">
                     <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
                     <input 
-                      className="w-full pl-10 pr-4 py-3 rounded-full bg-white shadow-sm border border-gray-100 outline-none text-sm focus:ring-2 transition-all"
-                      placeholder={mapStatus === 'success' ? "搜索地点 / 酒店 / 景点..." : "请先配置高德 API 密钥"}
+                      className={`w-full pl-10 pr-10 py-3 rounded-full bg-white shadow-sm border outline-none text-sm transition-all ${aiSearchMode ? 'border-purple-200 focus:ring-2 focus:ring-purple-200 placeholder-purple-300' : 'border-gray-100 focus:ring-2'}`}
+                      placeholder={mapStatus === 'success' ? (aiSearchMode ? "告诉AI想找什么...(按回车搜索)" : "搜索地点 / 酒店 / 景点...") : "请先配置高德 API 密钥"}
                       value={searchQuery}
                       onChange={e => setSearchQuery(e.target.value)}
                       onFocus={() => setIsSearching(true)}
-                      disabled={mapStatus !== 'success'}
-                      style={{ '--tw-ring-color': COLORS.light }}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && aiSearchMode) {
+                          handleAISearch();
+                        }
+                      }}
+                      disabled={mapStatus !== 'success' || isAILoading}
+                      style={!aiSearchMode ? { '--tw-ring-color': COLORS.light } : {}}
                     />
+                    <button
+                      onClick={() => { setAiSearchMode(!aiSearchMode); if(!aiSearchMode) setIsSearching(true); }}
+                      className={`absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full transition-colors ${aiSearchMode ? 'bg-purple-100 text-purple-600' : 'hover:bg-gray-100 text-slate-400'}`}
+                      title="AI 语义搜索"
+                    >
+                      {isAILoading && aiSearchMode ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />}
+                    </button>
                   </div>
                 </div>
               </div>
 
-              <div className="flex-1 overflow-y-auto px-6 pb-24">
+              {/* 核心修复点1：添加 min-h-0 以确保内容能正常滚动 */}
+              <div className="flex-1 overflow-y-auto px-6 pb-24 min-h-0 hide-scrollbar">
                 {isSearching ? (
                   <div className="space-y-3 animate-in fade-in slide-in-from-bottom-4">
                     {searchQuery.length === 0 ? (
@@ -833,7 +1036,7 @@ export default function App() {
 
           {/* ==================== 收藏夹页面 ==================== */}
           {activeTab === 'favorites' && (
-            <div className="h-full flex flex-col animate-in fade-in bg-[#f0f4f8]">
+            <div className="h-full flex flex-col animate-in fade-in bg-[#f0f4f8] min-h-0">
                <div className="px-6 pt-5 pb-3 bg-white shadow-sm z-10 shrink-0">
                  <h2 className="text-2xl font-bold">我的收藏夹</h2>
                  <div className="relative mt-4">
@@ -848,7 +1051,7 @@ export default function App() {
                  </div>
                </div>
                
-               <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6 pb-24">
+               <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6 pb-24 min-h-0">
                   {Object.keys(groupedFavorites).map(city => (
                     <div key={city} className="space-y-3">
                       <h3 className="font-bold text-lg text-slate-800 border-b border-gray-200 pb-1">{city}</h3>
@@ -885,12 +1088,12 @@ export default function App() {
 
           {/* ==================== 行程页面 ==================== */}
           {activeTab === 'lists' && (
-            <div className="h-full flex flex-col px-6 animate-in fade-in">
-               <div className="flex justify-between items-center py-4">
+            <div className="h-full flex flex-col px-6 animate-in fade-in min-h-0">
+               <div className="flex justify-between items-center py-4 shrink-0">
                   <h2 className="text-2xl font-bold">我的行程</h2>
                   <button onClick={() => setNewTripModalVisible(true)} className="w-10 h-10 rounded-full flex items-center justify-center bg-white shadow-sm active:scale-95"><Plus size={20} color={COLORS.primary}/></button>
                </div>
-               <div className="flex-1 overflow-y-auto pb-24 space-y-4 pt-2">
+               <div className="flex-1 overflow-y-auto pb-24 space-y-4 pt-2 min-h-0">
                   <div 
                     onClick={handleSmartRoute} 
                     className="bg-gradient-to-r from-blue-400 to-blue-600 p-5 rounded-3xl shadow-md text-white cursor-pointer active:scale-95 transition-transform"
@@ -926,14 +1129,14 @@ export default function App() {
 
           {/* ==================== 备忘页面 ==================== */}
           {activeTab === 'memo' && (
-            <div className="h-full flex flex-col animate-in fade-in bg-[#f0f4f8]">
+            <div className="h-full flex flex-col animate-in fade-in bg-[#f0f4f8] min-h-0">
                <div className="px-6 py-5 bg-white shadow-sm z-10 shrink-0">
                  <h2 className="text-2xl font-bold">出行备忘录</h2>
                  <p className="text-xs mt-1 font-medium text-slate-400">记录你的通用出行装备与事项</p>
                </div>
                
                <div className="px-6 py-4 shrink-0 mt-2">
-                 <div className="flex gap-2 bg-white p-2 rounded-2xl shadow-sm border border-gray-50">
+                 <div className="flex gap-2 bg-white p-2 rounded-2xl shadow-sm border border-gray-50 mb-3">
                     <input 
                       type="text" 
                       value={newMemoText}
@@ -950,24 +1153,64 @@ export default function App() {
                       <Plus size={20} />
                     </button>
                  </div>
+                 
+                 {/* 核心修复点3：添加一键功能与设置入口 */}
+                 <div className="flex gap-2">
+                    <button onClick={() => setAiMemoModalVisible(true)} className="flex-[1.2] py-2.5 bg-purple-50 text-purple-600 rounded-xl text-[11px] font-bold active:scale-95 flex items-center justify-center gap-1 shadow-sm transition-all hover:bg-purple-100 border border-purple-100">
+                       <Wand2 size={14}/> AI 生成
+                    </button>
+                    <button onClick={handleAddFromTemplate} className="flex-1 py-2.5 bg-blue-50 text-blue-600 rounded-xl text-[11px] font-bold active:scale-95 flex items-center justify-center gap-1 shadow-sm transition-all hover:bg-blue-100">
+                       <Sparkles size={14}/> 常用
+                    </button>
+                    <button onClick={() => setShowMemoTemplateModal(true)} className="px-3 py-2.5 bg-gray-50 text-slate-500 rounded-xl text-xs font-bold active:scale-95 shadow-sm transition-all hover:bg-gray-100">
+                       <Settings size={14}/>
+                    </button>
+                    <button onClick={handleClearDone} className="flex-1 py-2.5 bg-red-50 text-red-500 rounded-xl text-[11px] font-bold active:scale-95 flex items-center justify-center gap-1 shadow-sm transition-all hover:bg-red-100">
+                       <Trash2 size={14}/> 清除
+                    </button>
+                 </div>
                </div>
 
-               <div className="flex-1 overflow-y-auto px-6 pb-24 space-y-3">
+               <div className="flex-1 overflow-y-auto px-6 pb-24 space-y-3 min-h-0">
                   {globalMemos.length === 0 ? (
                     <div className="text-center py-10 text-sm text-slate-400">备忘录空空如也，添加一些物品吧</div>
                   ) : (
                     globalMemos.map(m => (
                       <div key={m.id} className="bg-white p-4 rounded-2xl shadow-sm flex items-center justify-between border border-gray-50 transition-transform">
-                         <div className="flex items-center gap-3 cursor-pointer flex-1" onClick={() => { toggleMemo(m.id, m.done); }}>
-                            {m.done ? <CheckCircle2 size={20} color={COLORS.primary}/> : <Circle size={20} color={COLORS.textLight}/>}
-                            <span className={`text-sm font-medium ${m.done ? 'line-through text-slate-300' : 'text-slate-700'}`}>{safeStr(m.text)}</span>
-                         </div>
-                         <button 
-                           onClick={() => handleDeleteMemo(m.id)} 
-                           className="p-2 ml-2 text-gray-300 hover:text-red-400 active:scale-95 transition-all rounded-full hover:bg-red-50"
-                         >
-                           <Trash2 size={16} />
-                         </button>
+                         {editingMemoId === m.id ? (
+                            <div className="flex-1 flex items-center gap-2 mr-2">
+                               <input
+                                 autoFocus
+                                 value={editingMemoText}
+                                 onChange={e => setEditingMemoText(e.target.value)}
+                                 onBlur={saveEditingMemo}
+                                 onKeyDown={e => e.key === 'Enter' && saveEditingMemo()}
+                                 className="flex-1 px-3 py-1.5 text-sm bg-gray-50 rounded-lg outline-none focus:ring-2 focus:ring-blue-200 border border-blue-100"
+                               />
+                               <button onMouseDown={(e) => { e.preventDefault(); saveEditingMemo(); }} className="p-1.5 bg-blue-100 text-blue-600 rounded-lg active:scale-95"><CornerDownLeft size={16}/></button>
+                            </div>
+                         ) : (
+                            <div className="flex items-center gap-3 cursor-pointer flex-1" onClick={() => { toggleMemo(m.id, m.done); }}>
+                               {m.done ? <CheckCircle2 size={20} color={COLORS.primary}/> : <Circle size={20} color={COLORS.textLight}/>}
+                               <span className={`text-sm font-medium ${m.done ? 'line-through text-slate-300' : 'text-slate-700'}`}>{safeStr(m.text)}</span>
+                            </div>
+                         )}
+                         {editingMemoId !== m.id && (
+                           <div className="flex items-center gap-1 shrink-0 ml-2">
+                             <button
+                               onClick={() => startEditingMemo(m)}
+                               className="p-2 text-gray-300 hover:text-blue-500 active:scale-95 transition-all rounded-full hover:bg-blue-50"
+                             >
+                               <Edit2 size={16} />
+                             </button>
+                             <button 
+                               onClick={() => handleDeleteMemo(m.id)} 
+                               className="p-2 text-gray-300 hover:text-red-400 active:scale-95 transition-all rounded-full hover:bg-red-50"
+                             >
+                               <Trash2 size={16} />
+                             </button>
+                           </div>
+                         )}
                       </div>
                     ))
                   )}
@@ -982,7 +1225,7 @@ export default function App() {
                  <User size={32} color={COLORS.primary} />
               </div>
               <h2 className="text-xl font-bold text-slate-800">
-                {user.is_anonymous ? '游客' : (user.email || '旅行者')}
+                {user?.is_anonymous ? '游客' : (user?.email || '旅行者')}
               </h2>
               
               <div className="mt-8 w-full bg-gray-50 rounded-3xl p-4 space-y-2 border border-gray-100">
@@ -994,8 +1237,8 @@ export default function App() {
                 </div>
                 <div className="flex justify-between items-center p-3 bg-white rounded-2xl shadow-sm">
                    <span className="text-sm font-bold text-gray-700">云端账号</span>
-                   <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${supabase && !user.is_anonymous ? 'text-blue-600 bg-blue-50' : 'text-slate-400 bg-slate-100'}`}>
-                     {supabase && !user.is_anonymous ? '已连接 Supabase' : '未验证'}
+                   <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${supabase && user && !user.is_anonymous ? 'text-blue-600 bg-blue-50' : 'text-slate-400 bg-slate-100'}`}>
+                     {supabase && user && !user.is_anonymous ? '已连接 Supabase' : '未验证'}
                    </span>
                 </div>
               </div>
@@ -1033,15 +1276,42 @@ export default function App() {
 
         {/* ===================== 弹窗组件群 ===================== */}
         
+        {/* AI 智能生成备忘录弹窗 */}
+        {aiMemoModalVisible && (
+          <div className="fixed inset-0 z-[140] flex items-center justify-center bg-black/40 backdrop-blur-sm p-6 animate-in fade-in">
+            <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl animate-in zoom-in-95">
+              <div className="flex items-center gap-2 mb-2">
+                 <Wand2 size={20} className="text-purple-500" />
+                 <h3 className="text-lg font-bold text-slate-800">AI 智能生成清单</h3>
+              </div>
+              <p className="text-xs text-slate-400 mb-5">输入你的旅行主题，AI 将为你预测必带物品。</p>
+              
+              <input
+                type="text" autoFocus placeholder="例如：12月长春滑雪"
+                className="w-full px-4 py-3 rounded-xl bg-gray-50 border-none outline-none text-sm mb-6 focus:ring-2 focus:ring-purple-200"
+                value={aiMemoTopic} onChange={e => setAiMemoTopic(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleGenerateAIMemo()}
+                disabled={isAILoading}
+              />
+              <div className="flex gap-3">
+                <button className="flex-1 py-3 rounded-xl bg-gray-100 text-sm font-bold text-slate-600 active:scale-95" disabled={isAILoading} onClick={() => { setAiMemoModalVisible(false); setAiMemoTopic(''); }}>取消</button>
+                <button className="flex-1 py-3 rounded-xl text-white text-sm font-bold active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2" style={{ backgroundColor: '#A855F7' }} disabled={!aiMemoTopic.trim() || isAILoading} onClick={handleGenerateAIMemo}>
+                  {isAILoading ? <Loader2 size={16} className="animate-spin" /> : '开始生成'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* 城市选择 */}
         {showCityPicker && (
           <div className="fixed inset-0 z-[130] flex items-end bg-black/40 backdrop-blur-sm animate-in fade-in">
-            <div className="bg-white w-full h-[80vh] rounded-t-3xl flex flex-col pb-safe animate-in slide-in-from-bottom-full">
-               <div className="px-6 py-5 flex items-center justify-between border-b border-gray-50">
+            <div className="bg-white w-full h-[80vh] rounded-t-3xl flex flex-col pb-safe animate-in slide-in-from-bottom-full min-h-0">
+               <div className="px-6 py-5 flex items-center justify-between border-b border-gray-50 shrink-0">
                   <h3 className="text-xl font-bold">选择城市</h3>
                   <button onClick={() => setShowCityPicker(false)} className="p-2 bg-gray-50 rounded-full"><X size={18}/></button>
                </div>
-               <div className="flex-1 overflow-y-auto p-6">
+               <div className="flex-1 overflow-y-auto p-6 min-h-0">
                  <div className="flex gap-2 mb-8">
                     <input 
                       type="text" value={customCityInput} onChange={e=>setCustomCityInput(e.target.value)}
@@ -1094,22 +1364,23 @@ export default function App() {
         {/* 行程路线展示弹窗：分段交通与自由排序升级 */}
         {/* ==================================================== */}
         {showRoutePanel && activeTripId && (
-          <div className="fixed inset-0 z-[120] flex flex-col bg-white animate-in slide-in-from-bottom-full">
-            <div className="px-6 py-5 flex items-center justify-between sticky top-0 bg-white/90 backdrop-blur z-20 border-b border-gray-50">
+          <div className="fixed inset-0 z-[120] flex flex-col bg-white animate-in slide-in-from-bottom-full min-h-0">
+            <div className="px-6 py-5 flex items-center justify-between sticky top-0 bg-white/90 backdrop-blur z-20 border-b border-gray-50 shrink-0">
                <div>
                  <h2 className="text-xl font-bold">行程规划与地图</h2>
                </div>
                <button onClick={() => {setShowRoutePanel(false);}} className="p-2 bg-gray-50 rounded-full"><X size={20}/></button>
             </div>
-            <div className="flex-1 overflow-y-auto pb-10">
+            <div className="flex-1 overflow-y-auto pb-10 min-h-0">
               <div className="p-6 pb-2 space-y-6">
                  
+                 {/* 传递独立分段交通方式给地图 */}
                  <RealMap 
                    places={tripPlaces} 
                    isRoute={true} 
                    mapStatus={mapStatus} 
                    currentCity={currentCity}
-                   routeMode={routeMode} 
+                   routeModes={segmentModes} 
                  />
 
                  <div className="bg-gray-50 rounded-3xl p-5 border border-gray-100">
@@ -1138,16 +1409,31 @@ export default function App() {
                              </div>
                            </div>
                            
+                           {/* 分段交通方式配置区（核心修复点2） */}
                            {i < tripPlaces.length - 1 && (
                              <div className="ml-[13px] border-l-[2px] border-dashed border-blue-200 pl-6 py-4 my-0.5 relative">
                                <div className="absolute -left-[11px] top-1/2 -translate-y-1/2 bg-white rounded-full p-1 text-blue-400 border border-blue-100 shadow-sm">
-                                  {routeMode === 'driving' ? <Car size={12} /> : routeMode === 'transit' ? <Bus size={12}/> : routeMode === 'walking' ? <Footprints size={12}/> : <Bike size={12}/>}
+                                  {(segmentModes[i]||'driving') === 'transit' ? <Bus size={12}/> : (segmentModes[i]||'driving') === 'walking' ? <Footprints size={12}/> : (segmentModes[i]||'driving') === 'riding' ? <Bike size={12}/> : <Car size={12}/>}
                                </div>
                                {isCalculatingSegments ? (
                                  <span className="text-[10px] text-slate-400 font-medium tracking-widest animate-pulse">路线规划中...</span>
                                ) : segmentRoutes[i] ? (
-                                 <div className="inline-flex items-center gap-2 bg-blue-50/80 px-2.5 py-1.5 rounded-lg border border-blue-100 text-[10px] text-blue-600 font-bold shadow-sm">
-                                   <span>{routeMode === 'driving' ? '驾车' : routeMode === 'transit' ? '公交地铁' : routeMode === 'walking' ? '步行' : '骑行'}</span>
+                                 <div className="inline-flex items-center gap-2 bg-blue-50/80 px-2.5 py-1.5 rounded-lg border border-blue-100 text-[10px] text-blue-600 font-bold shadow-sm relative overflow-hidden transition-all hover:bg-blue-100">
+                                   {/* 原生隐藏下拉框，完美兼容手机点击选择 */}
+                                   <select
+                                     value={segmentModes[i] || 'driving'}
+                                     onChange={(e) => handleSegmentModeChange(i, e.target.value)}
+                                     className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                                   >
+                                     <option value="driving">驾车</option>
+                                     <option value="transit">公交地铁</option>
+                                     <option value="riding">骑行</option>
+                                     <option value="walking">步行</option>
+                                   </select>
+                                   <span className="flex items-center gap-1">
+                                     {(segmentModes[i]||'driving') === 'driving' ? '🚗 驾车' : (segmentModes[i]||'driving') === 'transit' ? '🚌 公交地铁' : (segmentModes[i]||'driving') === 'walking' ? '🚶‍♂️ 步行' : '🚴 骑行'}
+                                     <ChevronDown size={10} className="opacity-50"/>
+                                   </span>
                                    <span className="opacity-40">|</span> 
                                    <span>{(segmentRoutes[i].distance/1000).toFixed(1)}公里</span> 
                                    <span className="opacity-40">|</span> 
@@ -1162,17 +1448,16 @@ export default function App() {
 
                     {segmentRoutes.length > 0 && !isCalculatingSegments && (
                       <div className="mt-6 p-4 bg-white rounded-2xl shadow-sm border border-blue-50">
-                         <div className="flex gap-2 mb-5 overflow-x-auto hide-scrollbar pb-1">
-                            <button onClick={() => setRouteMode('driving')} className={`shrink-0 px-4 py-2 rounded-full text-xs font-bold transition-all ${routeMode === 'driving' ? 'bg-blue-500 text-white shadow-md shadow-blue-200' : 'bg-gray-50 text-slate-500 border border-gray-100'}`}>🚗 驾车</button>
-                            <button onClick={() => setRouteMode('transit')} className={`shrink-0 px-4 py-2 rounded-full text-xs font-bold transition-all ${routeMode === 'transit' ? 'bg-indigo-500 text-white shadow-md shadow-indigo-200' : 'bg-gray-50 text-slate-500 border border-gray-100'}`}>🚌 公交地铁</button>
-                            <button onClick={() => setRouteMode('riding')} className={`shrink-0 px-4 py-2 rounded-full text-xs font-bold transition-all ${routeMode === 'riding' ? 'bg-orange-500 text-white shadow-md shadow-orange-200' : 'bg-gray-50 text-slate-500 border border-gray-100'}`}>🚴 骑行</button>
-                            <button onClick={() => setRouteMode('walking')} className={`shrink-0 px-4 py-2 rounded-full text-xs font-bold transition-all ${routeMode === 'walking' ? 'bg-green-500 text-white shadow-md shadow-green-200' : 'bg-gray-50 text-slate-500 border border-gray-100'}`}>🚶‍♂️ 步行</button>
+                         <div className="flex items-center gap-2 mb-4 overflow-x-auto hide-scrollbar pb-1">
+                            <span className="text-[11px] font-bold text-slate-400 shrink-0">批量设置:</span>
+                            <button onClick={() => setAllSegmentModes('driving')} className="shrink-0 px-3 py-1.5 rounded-full text-xs font-bold transition-all bg-gray-50 text-slate-500 border border-gray-100 active:scale-95">🚗 驾车</button>
+                            <button onClick={() => setAllSegmentModes('transit')} className="shrink-0 px-3 py-1.5 rounded-full text-xs font-bold transition-all bg-gray-50 text-slate-500 border border-gray-100 active:scale-95">🚌 公交</button>
+                            <button onClick={() => setAllSegmentModes('riding')} className="shrink-0 px-3 py-1.5 rounded-full text-xs font-bold transition-all bg-gray-50 text-slate-500 border border-gray-100 active:scale-95">🚴 骑行</button>
+                            <button onClick={() => setAllSegmentModes('walking')} className="shrink-0 px-3 py-1.5 rounded-full text-xs font-bold transition-all bg-gray-50 text-slate-500 border border-gray-100 active:scale-95">🚶‍♂️ 步行</button>
                          </div>
                          <div className="flex items-center gap-2 mb-3">
-                            <Navigation size={16} className={routeMode === 'driving' ? 'text-blue-600' : routeMode === 'walking' ? 'text-green-600' : routeMode === 'transit' ? 'text-indigo-600' : 'text-orange-600'} />
-                            <span className={`font-bold text-sm ${routeMode === 'driving' ? 'text-blue-600' : routeMode === 'walking' ? 'text-green-600' : routeMode === 'transit' ? 'text-indigo-600' : 'text-orange-600'}`}>
-                              总计行程评估 ({routeMode === 'driving' ? '驾车' : routeMode === 'walking' ? '步行' : routeMode === 'transit' ? '公交地铁' : '骑行'})
-                            </span>
+                            <Navigation size={16} className="text-blue-600" />
+                            <span className="font-bold text-sm text-blue-600">总计行程评估</span>
                          </div>
                          <div className="flex justify-between items-center text-slate-600 bg-gray-50 rounded-xl p-3">
                             <div>
@@ -1182,7 +1467,7 @@ export default function App() {
                             <div className="h-8 w-px bg-gray-200"></div>
                             <div className="text-right">
                                <p className="text-[10px] text-slate-400 mb-0.5">预估总时长</p>
-                               <p className={`font-black text-lg ${routeMode === 'driving' ? 'text-blue-500' : routeMode === 'walking' ? 'text-green-500' : routeMode === 'transit' ? 'text-indigo-500' : 'text-orange-500'}`}>
+                               <p className="font-black text-lg text-blue-500">
                                   {Math.round(totalTime / 60)} <span className="text-xs font-medium text-slate-500">分钟</span>
                                </p>
                             </div>
@@ -1191,6 +1476,68 @@ export default function App() {
                     )}
                  </div>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* 备忘录常用模板设置弹窗 */}
+        {showMemoTemplateModal && (
+          <div className="fixed inset-0 z-[160] flex items-center justify-center bg-black/40 backdrop-blur-sm p-6 animate-in fade-in">
+            <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[80vh]">
+              <div className="flex justify-between items-center mb-4 shrink-0">
+                <div>
+                  <h3 className="text-lg font-bold text-slate-800">设置常用备忘</h3>
+                  <p className="text-[10px] text-slate-400 mt-1">一键添加时将自动引入这些物品</p>
+                </div>
+                <button onClick={() => setShowMemoTemplateModal(false)} className="p-1.5 bg-gray-50 rounded-full hover:bg-gray-100 transition-colors"><X size={16}/></button>
+              </div>
+              
+              <div className="flex gap-2 mb-4 shrink-0">
+                 <input
+                   type="text" 
+                   value={newTemplateItem} 
+                   onChange={e => setNewTemplateItem(e.target.value)}
+                   onKeyDown={e => {
+                     if (e.key === 'Enter' && newTemplateItem.trim()) {
+                        if (!memoTemplate.includes(newTemplateItem.trim())) {
+                           setMemoTemplate(prev => [newTemplateItem.trim(), ...prev]);
+                        }
+                        setNewTemplateItem('');
+                     }
+                   }}
+                   placeholder="添加新模板物品..."
+                   className="flex-1 px-4 py-2.5 rounded-xl bg-gray-50 border-none outline-none text-sm focus:ring-2 focus:ring-blue-100"
+                 />
+                 <button
+                   onClick={() => {
+                     if (newTemplateItem.trim() && !memoTemplate.includes(newTemplateItem.trim())) {
+                       setMemoTemplate(prev => [newTemplateItem.trim(), ...prev]);
+                       setNewTemplateItem('');
+                     }
+                   }}
+                   className="px-5 rounded-xl text-white font-bold text-sm transition-transform active:scale-95"
+                   style={{ backgroundColor: COLORS.primary }}
+                 >新增</button>
+              </div>
+              
+              <div className="flex-1 overflow-y-auto space-y-2 mb-6 pr-1 min-h-0">
+                 {memoTemplate.length === 0 ? <p className="text-xs text-slate-400 text-center py-6">暂无常用物品</p> : null}
+                 {memoTemplate.map((item, idx) => (
+                    <div key={idx} className="flex justify-between items-center bg-white border border-gray-100 px-4 py-3 rounded-xl shadow-sm">
+                       <span className="text-slate-700 text-sm font-medium">{item}</span>
+                       <button 
+                         onClick={() => setMemoTemplate(prev => prev.filter((_, i) => i !== idx))} 
+                         className="p-1.5 text-slate-300 hover:text-red-400 hover:bg-red-50 rounded-full transition-colors"
+                       ><X size={14}/></button>
+                    </div>
+                 ))}
+              </div>
+              
+              <button 
+                className="w-full py-3.5 rounded-xl text-white text-sm font-bold active:scale-95 shadow-md shrink-0" 
+                style={{ backgroundColor: COLORS.primary }}
+                onClick={() => setShowMemoTemplateModal(false)}
+              >完成设置</button>
             </div>
           </div>
         )}
@@ -1222,8 +1569,8 @@ export default function App() {
         {/* 收藏夹起点规划周边浮层 */}
         {routeBuilderStart && (
           <div className="fixed inset-0 z-[150] flex items-end bg-black/40 backdrop-blur-sm animate-in fade-in">
-             <div className="bg-white w-full rounded-t-3xl p-6 pb-safe animate-in slide-in-from-bottom-full">
-                <div className="flex justify-between items-center mb-6 border-b border-gray-100 pb-4">
+             <div className="bg-white w-full rounded-t-3xl p-6 pb-safe animate-in slide-in-from-bottom-full min-h-0">
+                <div className="flex justify-between items-center mb-6 border-b border-gray-100 pb-4 shrink-0">
                    <div>
                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">已设为起点</p>
                      <h3 className="text-lg font-bold text-slate-800">{routeBuilderStart.name}</h3>
@@ -1235,7 +1582,7 @@ export default function App() {
                    const recs = getRecommendations(routeBuilderStart);
                    if (recs.length === 0) return <p className="text-sm text-slate-400 py-6 text-center">附近 10km 内没有其他已收藏的地点</p>;
                    return (
-                      <div className="space-y-3 mb-6">
+                      <div className="space-y-3 mb-6 flex-1 overflow-y-auto min-h-0">
                          <h4 className="text-sm font-bold text-slate-600 flex items-center gap-1.5"><Sparkles size={14} color="#FCD34D"/> 推荐顺路一起去：</h4>
                          {recs.map(r => (
                             <div 
@@ -1270,7 +1617,7 @@ export default function App() {
                      setActiveTripId(newTripId);
                      setShowRoutePanel(true);
                   }}
-                  className="w-full py-4 rounded-2xl text-white font-bold shadow-lg active:scale-95 transition-transform flex justify-center items-center gap-2"
+                  className="w-full py-4 rounded-2xl text-white font-bold shadow-lg active:scale-95 transition-transform flex justify-center items-center gap-2 shrink-0"
                   style={{ backgroundColor: COLORS.primary }}
                 >
                   <Navigation size={18}/> 规划路线并加入行程
