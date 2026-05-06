@@ -4,8 +4,7 @@ import {
   Navigation, Calendar, CheckCircle2, Circle, 
   ChevronRight, ArrowRight, X, Sparkles, Trash2, ClipboardList,
   Mail, KeyRound, Loader2, LogOut, AlertCircle, ChevronDown, ChevronLeft, LocateFixed,
-  Star, ChevronUp, Car, Bus, Footprints, Bike, Settings,
-  Wand2, Edit2, CornerDownLeft
+  Star, ChevronUp, Car, Bus, Footprints, Bike, Settings, Edit2, CornerDownLeft
 } from 'lucide-react';
 
 // ==========================================
@@ -157,7 +156,6 @@ const RealMap = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, current
           const path = places.map(p => getLngLat(p.location)).filter(Boolean);
 
           if (path.length >= 2) {
-            // 采用分段规划以支持混编交通方式
             path.forEach((start, i) => {
               if (i === path.length - 1) return;
               const end = path[i+1];
@@ -216,7 +214,6 @@ export default function App() {
 
   const [activeTab, setActiveTab] = useState('map');
   
-  // 🔥 新增：本地存储防崩溃保护罩
   const [savedPlaces, setSavedPlaces] = useState(() => {
     try {
       const local = localStorage.getItem('travel_saved_places');
@@ -257,15 +254,17 @@ export default function App() {
   const [searchResults, setSearchResults] = useState([]);
   const [selectedPlace, setSelectedPlace] = useState(null);
 
-  // AI 增强状态
-  const [aiSearchMode, setAiSearchMode] = useState(false);
-  const [isAILoading, setIsAILoading] = useState(false);
-  
-  const [aiMemoModalVisible, setAiMemoModalVisible] = useState(false);
-  const [aiMemoTopic, setAiMemoTopic] = useState('');
+  // 行程重命名状态
+  const [editingTripId, setEditingTripId] = useState(null);
+  const [editingTripName, setEditingTripName] = useState('');
 
   const [editingMemoId, setEditingMemoId] = useState(null);
   const [editingMemoText, setEditingMemoText] = useState('');
+
+  // AI 智能排期增强状态
+  const [showSmartPlanModal, setShowSmartPlanModal] = useState(false);
+  const [smartPlanPrompt, setSmartPlanPrompt] = useState('');
+  const [isSmartPlanning, setIsSmartPlanning] = useState(false);
 
   const [favSearchQuery, setFavSearchQuery] = useState('');
   const [routeBuilderStart, setRouteBuilderStart] = useState(null);
@@ -283,13 +282,13 @@ export default function App() {
 
   const autoComplete = useRef(null);
 
-  // --- 本地缓存备份 (无论是否登录都执行) ---
+  // --- 本地缓存备份 ---
   useEffect(() => { localStorage.setItem('travel_saved_places', JSON.stringify(savedPlaces)); }, [savedPlaces]);
   useEffect(() => { localStorage.setItem('travel_trips', JSON.stringify(trips)); }, [trips]);
   useEffect(() => { localStorage.setItem('travel_memos', JSON.stringify(globalMemos)); }, [globalMemos]);
   useEffect(() => { localStorage.setItem('travel_memo_template', JSON.stringify(memoTemplate)); }, [memoTemplate]);
 
-  // --- 云端数据同步：账号登录后拉取数据 ---
+  // --- 云端数据同步 ---
   useEffect(() => {
     if (user && !user.is_anonymous && supabase) {
       const fetchCloudData = async () => {
@@ -385,9 +384,6 @@ export default function App() {
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      // 如果开启了 AI 搜索模式，暂停常规的自动搜索，等待用户按回车
-      if (aiSearchMode) return;
-
       if (mapStatus === 'success' && searchQuery && window.AMap?.AutoComplete) {
         const autoOptions = currentCity !== '全国' ? { city: currentCity, citylimit: true } : { city: '全国' };
         
@@ -415,7 +411,7 @@ export default function App() {
       }
     }, 300);
     return () => clearTimeout(timer);
-  }, [searchQuery, mapStatus, currentCity, aiSearchMode]);
+  }, [searchQuery, mapStatus, currentCity]);
 
   // ==========================================
   // AI 核心调用逻辑 (DeepSeek)
@@ -447,72 +443,99 @@ export default function App() {
     }
   };
 
-  const handleAISearch = async () => {
-    if (!searchQuery.trim() || !window.AMap?.AutoComplete) return;
-    setIsAILoading(true);
+  const parseDeepSeekJSON = (text) => {
+    if (!text) return null;
+    let cleaned = text.replace(/```json/gi, '').replace(/```/g, '').trim();
+    const firstBracket = cleaned.indexOf('[');
+    const lastBracket = cleaned.lastIndexOf(']');
+    if (firstBracket !== -1 && lastBracket !== -1) {
+        cleaned = cleaned.substring(firstBracket, lastBracket + 1);
+    }
+    try {
+      return JSON.parse(cleaned);
+    } catch (e) {
+      console.error("JSON parse error:", e);
+      return null;
+    }
+  };
 
-    const prompt = `用户想在地图上找：“${searchQuery}”。请提炼成高德地图可以直接搜索的精准POI关键词（比如用户说“适合发呆看书的地方”，你返回“安静咖啡馆 书店”）。只需返回核心短语，用空格隔开，不要任何标点符号、解释或废话。`;
-    const keywords = await callDeepSeek(prompt);
+  const executeSmartPlan = async () => {
+    setIsSmartPlanning(true);
+    const cityPlaces = savedPlaces.filter(p => p.city === currentCity);
 
-    if (keywords) {
-      // 拿到关键词后，调用高德搜索
-      const autoOptions = currentCity !== '全国' ? { city: currentCity, citylimit: true } : { city: '全国' };
-      if (!autoComplete.current) {
-         autoComplete.current = new window.AMap.AutoComplete(autoOptions);
-      } else {
-         autoComplete.current.setCity(currentCity !== '全国' ? currentCity : '全国');
-         autoComplete.current.setCityLimit(currentCity !== '全国');
-      }
+    const routePrompt = `你是一个专业的旅行规划师。用户去：${currentCity}。特殊要求：${smartPlanPrompt || '选出最经典顺路的路线'}。
+    用户收藏了以下地点(JSON)：${JSON.stringify(cityPlaces.map(p=>({id: p.id, name: p.name})))}。
+    请根据用户要求，挑选合适的地点并排好顺路的游玩顺序。
+    【强制要求】：绝不能输出任何文字说明，直接返回一个包含选中地点id的 JSON 数组（一维数组即可，如 ["id1", "id2"]）。`;
 
-      autoComplete.current.search(keywords, (status, result) => {
-        if (status === 'complete' && result?.tips) {
-          setSearchResults(result.tips.filter(item => item && item.location));
-        } else {
-          setSearchResults([]);
-        }
-        setIsAILoading(false);
-      });
+    const routeResult = await callDeepSeek(routePrompt);
+    let parsedResult = parseDeepSeekJSON(routeResult || '');
+
+    // 无论大模型返回什么格式，都压平为一维纯 ID 数组
+    let flatIds = [];
+    if (Array.isArray(parsedResult)) {
+       flatIds = parsedResult.flat(Infinity);
+    }
+    flatIds = flatIds.filter(id => cityPlaces.some(p => p.id === id));
+
+    if (flatIds.length === 0) {
+       flatIds = cityPlaces.map(p => p.id);
+    }
+
+    // 🚀 前端强力解析：探测用户的意图，只要有数字强制物理切分！不再信任大模型的二维数组输出！
+    let requestedDays = 1;
+    const promptStr = smartPlanPrompt || '';
+    const match = promptStr.match(/(\d+|两|二|三|四|五|六|七|八|九|十)\s*天/);
+    if (match) {
+        const dayMap = { '两': 2, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9, '十': 10 };
+        requestedDays = parseInt(match[1]) || dayMap[match[1]] || 1;
+    }
+
+    const newTrips = [];
+    if (requestedDays > 1) {
+       // 按天数平均分段
+       const chunkSize = Math.ceil(flatIds.length / requestedDays);
+       for (let i = 0; i < requestedDays; i++) {
+           const dayChunk = flatIds.slice(i * chunkSize, (i + 1) * chunkSize);
+           if (dayChunk.length > 0) {
+               newTrips.push({
+                   id: 'trip_' + Date.now().toString() + '_' + i,
+                   name: `${currentCity} AI定制 - Day ${i+1}`,
+                   places: dayChunk
+               });
+           }
+       }
     } else {
-      setIsAILoading(false);
+       newTrips.push({
+           id: 'trip_' + Date.now().toString(),
+           name: `${currentCity} AI定制路线`,
+           places: flatIds
+       });
     }
+
+    if (newTrips.length > 0) {
+       const tripsToAdd = [...newTrips].reverse(); // 保证 Day 1 在最上面
+       setTrips(prev => [...tripsToAdd, ...prev]);
+       
+       if (user && !user.is_anonymous && supabase) {
+          try {
+             const cloudTrips = newTrips.map(t => ({ ...t, user_id: user.id }));
+             await supabase.from('trips').upsert(cloudTrips);
+          } catch(e) {}
+       }
+       
+       setActiveTripId(newTrips[newTrips.length - 1].id); // 选中 Day 1
+       setShowRoutePanel(true);
+       setActiveTab('lists');
+    } else {
+       alert('未能成功规划路线，请确保地点充足或稍后再试。');
+    }
+
+    setShowSmartPlanModal(false);
+    setSmartPlanPrompt('');
+    setIsSmartPlanning(false);
   };
 
-  const handleGenerateAIMemo = async () => {
-    if (!aiMemoTopic.trim()) return;
-    setIsAILoading(true);
-    const prompt = `你要为“${aiMemoTopic}”生成一份必备行李/备忘清单。请返回一个纯 JSON 格式的字符串数组（长度5-8项），例如 ["防晒霜", "充电宝", "墨镜"]。不要输出其他任何解释性文字。`;
-    const resultText = await callDeepSeek(prompt);
-
-    if (resultText) {
-      try {
-        // 清理可能的 markdown 标记
-        const cleanText = resultText.replace(/```json/g, '').replace(/```/g, '').trim();
-        const items = JSON.parse(cleanText);
-
-        if (Array.isArray(items)) {
-          const newMemos = items.map(text => ({
-            id: Date.now().toString() + '_' + Math.random().toString(36).substring(2, 9),
-            text,
-            done: false
-          }));
-          setGlobalMemos(prev => [...newMemos, ...prev]);
-
-          if (user && !user.is_anonymous && supabase) {
-            const cloudMemos = newMemos.map(m => ({ ...m, user_id: user.id }));
-            try { await supabase.from('memos').insert(cloudMemos); } catch(e){}
-          }
-          setAiMemoModalVisible(false);
-          setAiMemoTopic('');
-        }
-      } catch (e) {
-        console.error("JSON 解析失败:", e, resultText);
-        alert("AI 格式返回异常，请重试");
-      }
-    }
-    setIsAILoading(false);
-  };
-
-  // 🔥 新增防崩溃保护：增加 ?.places?.map 防止旧行程数据结构缺失导致崩溃
   const tripPlaces = showRoutePanel && activeTripId 
     ? (trips.find(t => t.id === activeTripId)?.places?.map(pid => savedPlaces.find(p => p.id === pid)).filter(Boolean) || [])
     : [];
@@ -656,6 +679,25 @@ export default function App() {
     }
   };
 
+  const startEditingTrip = (trip, e) => {
+    e.stopPropagation();
+    setEditingTripId(trip.id);
+    setEditingTripName(trip.name);
+  };
+
+  const saveTripName = async () => {
+    if (!editingTripName.trim() || !editingTripId) {
+       setEditingTripId(null);
+       return;
+    }
+    setTrips(prev => prev.map(t => t.id === editingTripId ? { ...t, name: editingTripName.trim() } : t));
+    if (user && !user.is_anonymous && supabase) {
+      try { await supabase.from('trips').update({ name: editingTripName.trim() }).eq('id', editingTripId); } catch(e){}
+    }
+    setEditingTripId(null);
+    setEditingTripName('');
+  };
+
   const movePlace = async (index, direction) => {
     let updatedPlaces = [];
     setTrips(prevTrips => prevTrips.map(trip => {
@@ -703,9 +745,7 @@ export default function App() {
     }
   };
 
-  // 备忘录增强：一键添加常用
   const handleAddFromTemplate = async () => {
-    // 过滤掉当前已经存在且未打勾的项，避免重复添加
     const itemsToAdd = memoTemplate.filter(t => !globalMemos.some(m => m.text === t && !m.done));
     if (itemsToAdd.length === 0) return;
 
@@ -723,7 +763,6 @@ export default function App() {
     }
   };
 
-  // 备忘录增强：一键清除已完成
   const handleClearDone = async () => {
     const idsToDelete = globalMemos.filter(m => m.done).map(m => m.id);
     if (idsToDelete.length === 0) return;
@@ -735,7 +774,6 @@ export default function App() {
     }
   };
 
-  // 备忘录编辑功能
   const startEditingMemo = (m) => {
     setEditingMemoId(m.id);
     setEditingMemoText(m.text);
@@ -826,14 +864,7 @@ export default function App() {
       alert(`${currentCity} 收藏的地点不足2个，无法规划路线，请先去发现页面多收藏几个吧！`);
       return;
     }
-    const newTripId = 'trip_' + Date.now().toString();
-    createTrip({
-       id: newTripId,
-       name: `${currentCity} 智能路线`,
-       places: cityPlaces.map(p => p.id)
-    });
-    setActiveTripId(newTripId);
-    setShowRoutePanel(true);
+    setShowSmartPlanModal(true);
   };
 
   const filteredFavs = savedPlaces.filter(p => 
@@ -961,26 +992,14 @@ export default function App() {
                   <div className="flex-1 relative transition-all">
                     <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
                     <input 
-                      className={`w-full pl-10 pr-10 py-3 rounded-full bg-white shadow-sm border outline-none text-sm transition-all ${aiSearchMode ? 'border-purple-200 focus:ring-2 focus:ring-purple-200 placeholder-purple-300' : 'border-gray-100 focus:ring-2'}`}
-                      placeholder={mapStatus === 'success' ? (aiSearchMode ? "告诉AI想找什么...(按回车搜索)" : "搜索地点 / 酒店 / 景点...") : "请先配置高德 API 密钥"}
+                      className="w-full pl-10 pr-4 py-3 rounded-full bg-white shadow-sm border border-gray-100 outline-none text-sm focus:ring-2 transition-all"
+                      placeholder={mapStatus === 'success' ? "搜索地点 / 酒店 / 景点..." : "请先配置高德 API 密钥"}
                       value={searchQuery}
                       onChange={e => setSearchQuery(e.target.value)}
                       onFocus={() => setIsSearching(true)}
-                      onKeyDown={e => {
-                        if (e.key === 'Enter' && aiSearchMode) {
-                          handleAISearch();
-                        }
-                      }}
-                      disabled={mapStatus !== 'success' || isAILoading}
-                      style={!aiSearchMode ? { '--tw-ring-color': COLORS.light } : {}}
+                      disabled={mapStatus !== 'success'}
+                      style={{ '--tw-ring-color': COLORS.light }}
                     />
-                    <button
-                      onClick={() => { setAiSearchMode(!aiSearchMode); if(!aiSearchMode) setIsSearching(true); }}
-                      className={`absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full transition-colors ${aiSearchMode ? 'bg-purple-100 text-purple-600' : 'hover:bg-gray-100 text-slate-400'}`}
-                      title="AI 语义搜索"
-                    >
-                      {isAILoading && aiSearchMode ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />}
-                    </button>
                   </div>
                 </div>
               </div>
@@ -1124,8 +1143,28 @@ export default function App() {
                     trips.map(trip => (
                       <div key={trip.id} onClick={() => {setActiveTripId(trip.id); setShowRoutePanel(true)}} className="bg-white p-5 rounded-3xl shadow-sm border border-gray-50 cursor-pointer active:scale-95">
                         <div className="flex justify-between items-start mb-2">
-                          <h3 className="font-bold text-lg">{safeStr(trip.name)}</h3>
-                          <button onClick={(e) => { e.stopPropagation(); removeTrip(trip.id); }} className="text-slate-300 hover:text-red-400 p-1">
+                          {editingTripId === trip.id ? (
+                             <div className="flex-1 flex items-center gap-2 mr-2">
+                               <input
+                                 autoFocus
+                                 value={editingTripName}
+                                 onChange={e => setEditingTripName(e.target.value)}
+                                 onBlur={saveTripName}
+                                 onKeyDown={e => e.key === 'Enter' && saveTripName()}
+                                 onClick={e => e.stopPropagation()}
+                                 className="flex-1 font-bold text-lg border-b border-blue-200 outline-none bg-transparent pb-0.5 text-slate-800"
+                               />
+                               <button onClick={(e) => { e.stopPropagation(); saveTripName(); }} className="p-1.5 bg-blue-100 text-blue-600 rounded-lg active:scale-95 shrink-0"><CheckCircle2 size={16}/></button>
+                             </div>
+                          ) : (
+                             <div className="flex-1 flex items-center gap-2 min-w-0">
+                               <h3 className="font-bold text-lg truncate text-slate-800">{safeStr(trip.name)}</h3>
+                               <button onClick={(e) => startEditingTrip(trip, e)} className="shrink-0 p-1.5 text-slate-300 hover:text-blue-500 hover:bg-blue-50 rounded-md transition-colors" title="修改名称">
+                                 <Edit2 size={14}/>
+                               </button>
+                             </div>
+                          )}
+                          <button onClick={(e) => { e.stopPropagation(); removeTrip(trip.id); }} className="text-slate-300 hover:text-red-400 p-1 shrink-0 ml-2">
                             <Trash2 size={16} />
                           </button>
                         </div>
@@ -1163,19 +1202,18 @@ export default function App() {
                       <Plus size={20} />
                     </button>
                  </div>
-                 
-                 <div className="flex gap-2">
-                    <button onClick={() => setAiMemoModalVisible(true)} className="flex-[1.2] py-2.5 bg-purple-50 text-purple-600 rounded-xl text-[11px] font-bold active:scale-95 flex items-center justify-center gap-1 shadow-sm transition-all hover:bg-purple-100 border border-purple-100">
-                       <Wand2 size={14}/> AI 生成
+
+                 {/* ✨ UI重塑：融入主色调的低饱和度标签按钮 */}
+                 <div className="flex items-center gap-2 pb-2 mb-1 overflow-x-auto hide-scrollbar">
+                    <button onClick={handleAddFromTemplate} className="shrink-0 flex items-center gap-1.5 px-4 py-2 bg-blue-50 text-blue-500 rounded-full text-xs font-bold active:scale-95 transition-all shadow-sm">
+                       <Sparkles size={14}/> 常用模板
                     </button>
-                    <button onClick={handleAddFromTemplate} className="flex-1 py-2.5 bg-blue-50 text-blue-600 rounded-xl text-[11px] font-bold active:scale-95 flex items-center justify-center gap-1 shadow-sm transition-all hover:bg-blue-100">
-                       <Sparkles size={14}/> 常用
+                    <button onClick={() => setShowMemoTemplateModal(true)} className="shrink-0 flex items-center gap-1 px-3 py-2 bg-gray-50 text-slate-500 rounded-full text-xs font-medium active:scale-95 transition-all hover:bg-gray-100">
+                       <Settings size={14}/> 设置
                     </button>
-                    <button onClick={() => setShowMemoTemplateModal(true)} className="px-3 py-2.5 bg-gray-50 text-slate-500 rounded-xl text-xs font-bold active:scale-95 shadow-sm transition-all hover:bg-gray-100">
-                       <Settings size={14}/>
-                    </button>
-                    <button onClick={handleClearDone} className="flex-1 py-2.5 bg-red-50 text-red-500 rounded-xl text-[11px] font-bold active:scale-95 flex items-center justify-center gap-1 shadow-sm transition-all hover:bg-red-100">
-                       <Trash2 size={14}/> 清除
+                    <div className="flex-1"></div>
+                    <button onClick={handleClearDone} className="shrink-0 flex items-center gap-1 px-3 py-2 text-slate-400 hover:text-red-500 rounded-full text-xs font-medium active:scale-95 transition-all hover:bg-red-50">
+                       <Trash2 size={14}/> 清理完成
                     </button>
                  </div>
                </div>
@@ -1285,33 +1323,6 @@ export default function App() {
 
         {/* ===================== 弹窗组件群 ===================== */}
         
-        {/* AI 智能生成备忘录弹窗 */}
-        {aiMemoModalVisible && (
-          <div className="fixed inset-0 z-[140] flex items-center justify-center bg-black/40 backdrop-blur-sm p-6 animate-in fade-in">
-            <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl animate-in zoom-in-95">
-              <div className="flex items-center gap-2 mb-2">
-                 <Wand2 size={20} className="text-purple-500" />
-                 <h3 className="text-lg font-bold text-slate-800">AI 智能生成清单</h3>
-              </div>
-              <p className="text-xs text-slate-400 mb-5">输入你的旅行主题，AI 将为你预测必带物品。</p>
-              
-              <input
-                type="text" autoFocus placeholder="例如：12月长春滑雪"
-                className="w-full px-4 py-3 rounded-xl bg-gray-50 border-none outline-none text-sm mb-6 focus:ring-2 focus:ring-purple-200"
-                value={aiMemoTopic} onChange={e => setAiMemoTopic(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleGenerateAIMemo()}
-                disabled={isAILoading}
-              />
-              <div className="flex gap-3">
-                <button className="flex-1 py-3 rounded-xl bg-gray-100 text-sm font-bold text-slate-600 active:scale-95" disabled={isAILoading} onClick={() => { setAiMemoModalVisible(false); setAiMemoTopic(''); }}>取消</button>
-                <button className="flex-1 py-3 rounded-xl text-white text-sm font-bold active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2" style={{ backgroundColor: '#A855F7' }} disabled={!aiMemoTopic.trim() || isAILoading} onClick={handleGenerateAIMemo}>
-                  {isAILoading ? <Loader2 size={16} className="animate-spin" /> : '开始生成'}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* 城市选择 */}
         {showCityPicker && (
           <div className="fixed inset-0 z-[130] flex items-end bg-black/40 backdrop-blur-sm animate-in fade-in">
@@ -1365,6 +1376,36 @@ export default function App() {
                   }
                 }}>确认创建</button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* ==================================================== */}
+        {/* 🔥 全新：AI 智能行程约束排期 (支持多天) */}
+        {/* ==================================================== */}
+        {showSmartPlanModal && (
+          <div className="fixed inset-0 z-[140] flex items-center justify-center bg-black/40 backdrop-blur-sm p-6 animate-in fade-in">
+            <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl animate-in zoom-in-95">
+               <div className="flex items-center gap-2 mb-2">
+                 <Sparkles size={20} className="text-blue-500" />
+                 <h3 className="text-lg font-bold text-slate-800">AI 智能排期 (支持多天)</h3>
+               </div>
+               <p className="text-xs text-slate-400 mb-5">告诉 AI 你的特殊要求（例如：3天时间、带老人）。AI 将为你挑选顺路地点并自动生成每天的游玩顺序。</p>
+               <textarea
+                 autoFocus
+                 rows={3}
+                 placeholder="例如：我只有2天时间，带着老人，行程尽量轻松..."
+                 className="w-full px-4 py-3 rounded-xl bg-gray-50 border-none outline-none text-sm mb-6 focus:ring-2 focus:ring-blue-200 resize-none"
+                 value={smartPlanPrompt}
+                 onChange={e => setSmartPlanPrompt(e.target.value)}
+                 disabled={isSmartPlanning}
+               />
+               <div className="flex gap-3">
+                 <button disabled={isSmartPlanning} onClick={() => setShowSmartPlanModal(false)} className="flex-1 py-3 rounded-xl bg-gray-100 text-sm font-bold text-slate-600 active:scale-95">取消</button>
+                 <button disabled={isSmartPlanning} onClick={executeSmartPlan} className="flex-1 py-3 rounded-xl text-white text-sm font-bold active:scale-95 disabled:opacity-50 flex justify-center items-center gap-2" style={{ backgroundColor: COLORS.primary }}>
+                   {isSmartPlanning ? <Loader2 size={16} className="animate-spin" /> : '开始智能排期'}
+                 </button>
+               </div>
             </div>
           </div>
         )}

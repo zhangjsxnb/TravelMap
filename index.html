@@ -1,13 +1,36 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>travel-map</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>TravelMap 旅行管家</title>
+
+    <!-- 1. PWA 核心配置文件 (身份证) -->
+    <link rel="manifest" href="/manifest.json" />
+
+    <!-- 2. iOS 苹果系统适配 (让它更像原生 App) -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="TravelMap" />
+    <link rel="apple-touch-icon" href="/logo192.png" />
+
+    <!-- 3. 主题颜色 (匹配你的 App UI 顶部颜色) -->
+    <meta name="theme-color" content="#FCF8E7" />
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
+
+    <!-- 4. 注册 Service Worker (实现离线访问和安装提示) -->
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').catch(err => {
+            console.log('Service Worker 注册失败: ', err);
+          });
+        });
+      }
+    </script>
   </body>
 </html>
