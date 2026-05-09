@@ -143,17 +143,18 @@ const getLngLat = (loc) => {
 // ==========================================
 // 地图核心组件
 // ==========================================
-const RealMap = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, currentCity, onMarkerClick, routeModes = [], lockViewport = true, lockedZoom = 11, onZoomChange }) => {
+const RealMap = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, currentCity, onMarkerClick, routeModes = [], lockViewport = true, mapView, onMapViewChange }) => {
   const containerRef = useRef(null);
   const mapInstance = useRef(null);
-  const prevCityRef = useRef(currentCity);
+  const prevCityRef = useRef('');
 
   useEffect(() => {
     if (mapStatus === 'success' && containerRef.current && window.AMap?.Map) {
       try {
         if (!mapInstance.current) {
           mapInstance.current = new window.AMap.Map(containerRef.current, {
-            zoom: 11,
+            zoom: mapView?.zoom || 11,
+            center: mapView?.center || undefined,
             mapStyle: 'amap://styles/normal',
             isHotspot: true 
           });
@@ -171,18 +172,28 @@ const RealMap = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, current
           });
           mapInstance.current.on('zoomend', () => {
             const zoom = mapInstance.current?.getZoom?.();
-            if (typeof zoom === 'number' && onZoomChange) onZoomChange(zoom);
+            const center = mapInstance.current?.getCenter?.();
+            if (typeof zoom === 'number' && center && onMapViewChange) {
+              onMapViewChange({ zoom, center: [center.lng, center.lat] });
+            }
+          });
+          mapInstance.current.on('moveend', () => {
+            const zoom = mapInstance.current?.getZoom?.();
+            const center = mapInstance.current?.getCenter?.();
+            if (typeof zoom === 'number' && center && onMapViewChange) {
+              onMapViewChange({ zoom, center: [center.lng, center.lat] });
+            }
           });
         }
         
         const map = mapInstance.current;
         
-              if (prevCityRef.current !== currentCity) {
-                if (currentCity !== '全国') {
-                  map.setCity(currentCity);
-                }
-                prevCityRef.current = currentCity;
-              }
+        if (prevCityRef.current !== currentCity) {
+          if (currentCity !== '全国') {
+            map.setCity(currentCity);
+          }
+          prevCityRef.current = currentCity;
+        }
 
         map.clearMap();
 
@@ -232,14 +243,11 @@ const RealMap = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, current
         } else if (places.length > 0 && !isRoute && !lockViewport) {
           map.setFitView();
         }
-        if (lockViewport && typeof lockedZoom === 'number') {
-          map.setZoom(lockedZoom);
-        }
       } catch (err) {
         console.error("Map rendering error:", err);
       }
     }
-  }, [places, isRoute, mapStatus, currentCity, onMarkerClick, routeModes, lockViewport, lockedZoom, onZoomChange]);
+  }, [places, isRoute, mapStatus, currentCity, onMarkerClick, routeModes, lockViewport, mapView, onMapViewChange]);
 
   if (mapStatus === 'loading') return <div className="w-full aspect-square bg-blue-50 rounded-3xl flex items-center justify-center text-blue-300 shadow-inner mb-6"><Loader2 className="animate-spin" /></div>;
   if (mapStatus === 'no-key') return <div className="w-full aspect-square bg-gray-50 border-2 border-dashed border-gray-200 rounded-3xl flex flex-col items-center justify-center p-6 text-center shadow-inner mb-6"><MapIcon size={32} className="text-gray-300 mb-3" /><p className="text-sm font-bold text-gray-500 mb-1">尚未配置完整的地图 API</p></div>;
@@ -339,7 +347,15 @@ export default function App() {
   const [isCalculatingSegments, setIsCalculatingSegments] = useState(false);
   const [stayMinutesByPlace, setStayMinutesByPlace] = useState({});
   const [lockMapViewport, setLockMapViewport] = useState(true);
-  const [lockedZoom, setLockedZoom] = useState(() => Number(localStorage.getItem('travel_locked_zoom')) || 11);
+  const [mapView, setMapView] = useState(() => {
+    try {
+      const local = JSON.parse(localStorage.getItem('travel_map_view') || '{}');
+      if (typeof local.zoom === 'number' && Array.isArray(local.center) && local.center.length === 2) return local;
+    } catch {
+      return { zoom: 11, center: null };
+    }
+    return { zoom: 11, center: null };
+  });
   const [collapsedCities, setCollapsedCities] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('travel_collapsed_cities') || '{}');
@@ -358,7 +374,7 @@ export default function App() {
   useEffect(() => { localStorage.setItem('travel_memos', JSON.stringify(globalMemos)); }, [globalMemos]);
   useEffect(() => { localStorage.setItem('travel_memo_template', JSON.stringify(memoTemplate)); }, [memoTemplate]);
   useEffect(() => { localStorage.setItem('travel_day_start_at', dayStartAt); }, [dayStartAt]);
-  useEffect(() => { localStorage.setItem('travel_locked_zoom', String(lockedZoom)); }, [lockedZoom]);
+  useEffect(() => { localStorage.setItem('travel_map_view', JSON.stringify(mapView)); }, [mapView]);
   useEffect(() => { localStorage.setItem('travel_collapsed_cities', JSON.stringify(collapsedCities)); }, [collapsedCities]);
 
   // --- 云端数据同步 ---
@@ -1291,8 +1307,8 @@ export default function App() {
                       mapErrorMsg={mapErrorMsg} 
                       currentCity={currentCity} 
                       lockViewport={lockMapViewport}
-                      lockedZoom={lockedZoom}
-                      onZoomChange={setLockedZoom}
+                      mapView={mapView}
+                      onMapViewChange={setMapView}
                       onMarkerClick={(p) => setSelectedPlace(p)}
                     />
                     {savedPlaces.length === 0 && mapStatus === 'success' && (
@@ -1747,8 +1763,8 @@ export default function App() {
                    mapStatus={mapStatus} 
                    currentCity={currentCity}
                    lockViewport={lockMapViewport}
-                   lockedZoom={lockedZoom}
-                   onZoomChange={setLockedZoom}
+                   mapView={mapView}
+                   onMapViewChange={setMapView}
                    routeModes={segmentModes} 
                  />
 
@@ -1782,7 +1798,7 @@ export default function App() {
                         <div className="flex items-center gap-2">
                           <label className="text-[11px] text-slate-500 flex items-center gap-1">
                             <input type="checkbox" checked={lockMapViewport} onChange={(event) => setLockMapViewport(event.target.checked)} />
-                            锁定地图缩放({lockedZoom.toFixed(1)}x)
+                            锁定地图缩放({Number(mapView?.zoom || 11).toFixed(1)}x)
                           </label>
                           <input
                             type="time"
