@@ -101,6 +101,15 @@ const estimateStayMinutes = (place) => {
   return 90;
 };
 
+const inferCityName = (placeData, fallbackCity) => {
+  const fromCity = safeStr(placeData?.city).replace('市', '').trim();
+  if (fromCity) return fromCity;
+  const district = safeStr(placeData?.district);
+  const cityMatch = district.match(/([^省]+?)市/);
+  if (cityMatch?.[1]) return cityMatch[1];
+  return fallbackCity === '全国' ? '默认城市' : fallbackCity;
+};
+
 const normalizeGoodieItem = (item) => {
   if (!item) return null;
   if (typeof item === 'string') return { name: item.trim(), hint: '' };
@@ -168,7 +177,7 @@ const RealMap = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, current
         
         const map = mapInstance.current;
         
-              if (prevCityRef.current !== currentCity && !lockViewport) {
+              if (prevCityRef.current !== currentCity) {
                 if (currentCity !== '全国') {
                   map.setCity(currentCity);
                 }
@@ -177,7 +186,7 @@ const RealMap = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, current
 
         map.clearMap();
 
-        if (places.length === 0 && currentCity !== '全国' && !lockViewport) {
+        if (places.length === 0 && currentCity !== '全国') {
           map.setCity(currentCity);
         }
 
@@ -331,9 +340,17 @@ export default function App() {
   const [stayMinutesByPlace, setStayMinutesByPlace] = useState({});
   const [lockMapViewport, setLockMapViewport] = useState(true);
   const [lockedZoom, setLockedZoom] = useState(() => Number(localStorage.getItem('travel_locked_zoom')) || 11);
+  const [collapsedCities, setCollapsedCities] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('travel_collapsed_cities') || '{}');
+    } catch {
+      return {};
+    }
+  });
 
   const autoComplete = useRef(null);
   const aiRequestingRef = useRef(false);
+  const routeCacheRef = useRef(new Map());
 
   // --- 本地缓存备份 ---
   useEffect(() => { localStorage.setItem('travel_saved_places', JSON.stringify(savedPlaces)); }, [savedPlaces]);
@@ -342,6 +359,7 @@ export default function App() {
   useEffect(() => { localStorage.setItem('travel_memo_template', JSON.stringify(memoTemplate)); }, [memoTemplate]);
   useEffect(() => { localStorage.setItem('travel_day_start_at', dayStartAt); }, [dayStartAt]);
   useEffect(() => { localStorage.setItem('travel_locked_zoom', String(lockedZoom)); }, [lockedZoom]);
+  useEffect(() => { localStorage.setItem('travel_collapsed_cities', JSON.stringify(collapsedCities)); }, [collapsedCities]);
 
   // --- 云端数据同步 ---
   useEffect(() => {
@@ -724,6 +742,13 @@ export default function App() {
     setIsCalculatingSegments(true);
 
     const fetchSegments = async () => {
+      const cacheKey = `${tripPlaceIds}__${JSON.stringify(segmentModes)}__${currentCity}`;
+      const cached = routeCacheRef.current.get(cacheKey);
+      if (cached) {
+        setSegmentRoutes(cached);
+        setIsCalculatingSegments(false);
+        return;
+      }
       const results = [];
       for (let i = 0; i < tripPlaces.length - 1; i++) {
          const p1 = tripPlaces[i];
@@ -782,6 +807,7 @@ export default function App() {
       }
       if (!canceled) {
         setSegmentRoutes(results);
+        routeCacheRef.current.set(cacheKey, results);
         setIsCalculatingSegments(false);
       }
     };
@@ -819,7 +845,7 @@ export default function App() {
       category: safeStr(placeData.category) || '景点',
       address: normalizedAddress,
       district: safeStr(placeData.district) || '',
-      city: currentCity === '全国' ? '默认城市' : currentCity, 
+      city: inferCityName(placeData, currentCity), 
       savedAt: Date.now()
     };
     setSavedPlaces(prev => {
@@ -1300,8 +1326,16 @@ export default function App() {
                <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6 pb-24 min-h-0">
                   {Object.keys(groupedFavorites).map(city => (
                     <div key={city} className="space-y-3">
-                      <h3 className="font-bold text-lg text-slate-800 border-b border-gray-200 pb-1">{city}</h3>
-                      <div className="grid gap-3">
+                      <div className="flex items-center justify-between border-b border-gray-200 pb-1">
+                        <h3 className="font-bold text-lg text-slate-800">{city}</h3>
+                        <button
+                          onClick={() => setCollapsedCities((prev) => ({ ...prev, [city]: !prev[city] }))}
+                          className="text-xs text-slate-500 px-2 py-1 rounded bg-white border border-gray-100"
+                        >
+                          {collapsedCities[city] ? '展开' : '收起'}
+                        </button>
+                      </div>
+                      {!collapsedCities[city] ? <div className="grid gap-3">
                         {groupedFavorites[city].map(spot => (
                           <div 
                             key={spot.id} 
@@ -1319,7 +1353,7 @@ export default function App() {
                             </button>
                           </div>
                         ))}
-                      </div>
+                      </div> : null}
                     </div>
                   ))}
                   {savedPlaces.length === 0 && (
