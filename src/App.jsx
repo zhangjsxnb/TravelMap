@@ -85,7 +85,7 @@ const toMinute = (timeText) => {
 };
 
 const toTimeText = (totalMinute) => {
-  const safe = Math.max(0, totalMinute);
+  const safe = ((Math.max(0, totalMinute) % 1440) + 1440) % 1440;
   const hour = String(Math.floor(safe / 60)).padStart(2, '0');
   const minute = String(safe % 60).padStart(2, '0');
   return `${hour}:${minute}`;
@@ -134,7 +134,7 @@ const getLngLat = (loc) => {
 // ==========================================
 // 地图核心组件
 // ==========================================
-const RealMap = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, currentCity, onMarkerClick, routeModes = [] }) => {
+const RealMap = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, currentCity, onMarkerClick, routeModes = [], lockViewport = true, lockedZoom = 11, onZoomChange }) => {
   const containerRef = useRef(null);
   const mapInstance = useRef(null);
   const prevCityRef = useRef(currentCity);
@@ -160,20 +160,24 @@ const RealMap = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, current
               });
             }
           });
+          mapInstance.current.on('zoomend', () => {
+            const zoom = mapInstance.current?.getZoom?.();
+            if (typeof zoom === 'number' && onZoomChange) onZoomChange(zoom);
+          });
         }
         
         const map = mapInstance.current;
         
-        if (prevCityRef.current !== currentCity) {
-          if (currentCity !== '全国') {
-            map.setCity(currentCity);
-          }
-          prevCityRef.current = currentCity;
-        }
+              if (prevCityRef.current !== currentCity && !lockViewport) {
+                if (currentCity !== '全国') {
+                  map.setCity(currentCity);
+                }
+                prevCityRef.current = currentCity;
+              }
 
         map.clearMap();
 
-        if (places.length === 0 && currentCity !== '全国') {
+        if (places.length === 0 && currentCity !== '全国' && !lockViewport) {
           map.setCity(currentCity);
         }
 
@@ -216,14 +220,17 @@ const RealMap = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, current
               }
             });
           }
-        } else if (places.length > 0 && !isRoute) {
+        } else if (places.length > 0 && !isRoute && !lockViewport) {
           map.setFitView();
+        }
+        if (lockViewport && typeof lockedZoom === 'number') {
+          map.setZoom(lockedZoom);
         }
       } catch (err) {
         console.error("Map rendering error:", err);
       }
     }
-  }, [places, isRoute, mapStatus, currentCity, onMarkerClick, routeModes]);
+  }, [places, isRoute, mapStatus, currentCity, onMarkerClick, routeModes, lockViewport, lockedZoom, onZoomChange]);
 
   if (mapStatus === 'loading') return <div className="w-full aspect-square bg-blue-50 rounded-3xl flex items-center justify-center text-blue-300 shadow-inner mb-6"><Loader2 className="animate-spin" /></div>;
   if (mapStatus === 'no-key') return <div className="w-full aspect-square bg-gray-50 border-2 border-dashed border-gray-200 rounded-3xl flex flex-col items-center justify-center p-6 text-center shadow-inner mb-6"><MapIcon size={32} className="text-gray-300 mb-3" /><p className="text-sm font-bold text-gray-500 mb-1">尚未配置完整的地图 API</p></div>;
@@ -301,8 +308,6 @@ export default function App() {
   const [editingMemoText, setEditingMemoText] = useState('');
 
   // AI 智能排期增强状态
-  const [showSmartPlanModal, setShowSmartPlanModal] = useState(false);
-  const [smartPlanPrompt, setSmartPlanPrompt] = useState('');
   const [isSmartPlanning, setIsSmartPlanning] = useState(false);
   const [aiChatOpen, setAiChatOpen] = useState(false);
   const [aiChatInput, setAiChatInput] = useState('');
@@ -323,8 +328,12 @@ export default function App() {
   const [segmentModes, setSegmentModes] = useState([]); 
   const [segmentRoutes, setSegmentRoutes] = useState([]); 
   const [isCalculatingSegments, setIsCalculatingSegments] = useState(false);
+  const [stayMinutesByPlace, setStayMinutesByPlace] = useState({});
+  const [lockMapViewport, setLockMapViewport] = useState(true);
+  const [lockedZoom, setLockedZoom] = useState(() => Number(localStorage.getItem('travel_locked_zoom')) || 11);
 
   const autoComplete = useRef(null);
+  const aiRequestingRef = useRef(false);
 
   // --- 本地缓存备份 ---
   useEffect(() => { localStorage.setItem('travel_saved_places', JSON.stringify(savedPlaces)); }, [savedPlaces]);
@@ -332,6 +341,7 @@ export default function App() {
   useEffect(() => { localStorage.setItem('travel_memos', JSON.stringify(globalMemos)); }, [globalMemos]);
   useEffect(() => { localStorage.setItem('travel_memo_template', JSON.stringify(memoTemplate)); }, [memoTemplate]);
   useEffect(() => { localStorage.setItem('travel_day_start_at', dayStartAt); }, [dayStartAt]);
+  useEffect(() => { localStorage.setItem('travel_locked_zoom', String(lockedZoom)); }, [lockedZoom]);
 
   // --- 云端数据同步 ---
   useEffect(() => {
@@ -343,9 +353,15 @@ export default function App() {
             supabase.from('trips').select('*').eq('user_id', user.id),
             supabase.from('memos').select('*').eq('user_id', user.id)
           ]);
-          if (pRes.data && pRes.data.length > 0) setSavedPlaces(pRes.data);
-          if (tRes.data && tRes.data.length > 0) setTrips(tRes.data);
-          if (mRes.data && mRes.data.length > 0) setGlobalMemos(mRes.data);
+          if (pRes.data) {
+            setSavedPlaces((prev) => {
+              const merged = new Map(prev.map((item) => [item.id, item]));
+              pRes.data.forEach((item) => merged.set(item.id, item));
+              return Array.from(merged.values()).sort((a, b) => Number(b.savedAt || 0) - Number(a.savedAt || 0));
+            });
+          }
+          if (tRes.data) setTrips(tRes.data);
+          if (mRes.data) setGlobalMemos(mRes.data);
         } catch(e) { console.error('Cloud fetch error', e); }
       };
       fetchCloudData();
@@ -528,8 +544,15 @@ export default function App() {
   };
 
   const buildTripsFromPlan = (planPayload, cityPlaces) => {
+    const used = new Set();
     const safeRoutes = (planPayload?.routes || []).map((route, index) => {
-      const ids = (route?.placeIds || []).filter((id) => cityPlaces.some((place) => place.id === id));
+      const ids = (route?.placeIds || [])
+        .filter((id) => cityPlaces.some((place) => place.id === id))
+        .filter((id) => {
+          if (used.has(id)) return false;
+          used.add(id);
+          return true;
+        });
       if (ids.length === 0) return null;
       return {
         id: `trip_${Date.now()}_${index}`,
@@ -545,17 +568,21 @@ export default function App() {
       alert('AI 方案中没有可执行的收藏地点，请先补充收藏。');
       return;
     }
-    const tripsToAdd = [...newTrips].reverse();
+    const normalizedTrips = newTrips.map((trip) => ({
+      ...trip,
+      places: Array.from(new Set(trip.places)),
+    }));
+    const tripsToAdd = [...normalizedTrips].reverse();
     setTrips((prev) => [...tripsToAdd, ...prev]);
     if (user && !user.is_anonymous && supabase) {
       try {
-        const cloudTrips = newTrips.map((trip) => ({ ...trip, user_id: user.id }));
+        const cloudTrips = normalizedTrips.map((trip) => ({ ...trip, user_id: user.id }));
         await supabase.from('trips').upsert(cloudTrips);
       } catch (error) {
         logCloudError('Sync AI trips', error);
       }
     }
-    setActiveTripId(newTrips[newTrips.length - 1].id);
+    setActiveTripId(normalizedTrips[normalizedTrips.length - 1].id);
     setShowRoutePanel(true);
     setActiveTab('lists');
   };
@@ -618,87 +645,9 @@ export default function App() {
     return newPlace.id;
   };
 
-  const executeSmartPlan = async () => {
-    setIsSmartPlanning(true);
-    const cityPlaces = savedPlaces.filter(p => p.city === currentCity);
-
-    const routePrompt = `你是一个专业的旅行规划师。用户去：${currentCity}。特殊要求：${smartPlanPrompt || '选出最经典顺路的路线'}。
-    用户收藏了以下地点(JSON)：${JSON.stringify(cityPlaces.map(p=>({id: p.id, name: p.name})))}。
-    请根据用户要求，挑选合适的地点并排好顺路的游玩顺序。
-    【强制要求】：绝不能输出任何文字说明，直接返回一个包含选中地点id的 JSON 数组（一维数组即可，如 ["id1", "id2"]）。`;
-
-    const routeResult = await callAiPlanner({
-      action: 'plan',
-      prompt: routePrompt,
-      city: currentCity,
-      places: cityPlaces.map((place) => ({
-        id: place.id,
-        name: place.name,
-        category: place.category,
-        address: place.address
-      })),
-      preferences: {
-        dayStartAt,
-        targetStopsPerDay: 6
-      }
-    });
-    const routeText = routeResult?.content || routeResult?.text || routeResult?.choices?.[0]?.message?.content || '';
-    let parsedResult = parseDeepSeekJSON(routeText || '');
-
-    // 无论大模型返回什么格式，都压平为一维纯 ID 数组
-    let flatIds = [];
-    if (Array.isArray(parsedResult)) {
-       flatIds = parsedResult.flat(Infinity);
-    }
-    flatIds = flatIds.filter(id => cityPlaces.some(p => p.id === id));
-
-    if (flatIds.length === 0) {
-       flatIds = cityPlaces.map(p => p.id);
-    }
-
-    // 🚀 前端强力解析：探测用户的意图，只要有数字强制物理切分！不再信任大模型的二维数组输出！
-    let requestedDays = 1;
-    const promptStr = smartPlanPrompt || '';
-    const match = promptStr.match(/(\d+|两|二|三|四|五|六|七|八|九|十)\s*天/);
-    if (match) {
-        const dayMap = { '两': 2, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9, '十': 10 };
-        requestedDays = parseInt(match[1]) || dayMap[match[1]] || 1;
-    }
-
-    const newTrips = [];
-    if (requestedDays > 1) {
-       // 按天数平均分段
-       const chunkSize = Math.ceil(flatIds.length / requestedDays);
-       for (let i = 0; i < requestedDays; i++) {
-           const dayChunk = flatIds.slice(i * chunkSize, (i + 1) * chunkSize);
-           if (dayChunk.length > 0) {
-               newTrips.push({
-                   id: 'trip_' + Date.now().toString() + '_' + i,
-                   name: `${currentCity} AI定制 - Day ${i+1}`,
-                   places: dayChunk
-               });
-           }
-       }
-    } else {
-       newTrips.push({
-           id: 'trip_' + Date.now().toString(),
-           name: `${currentCity} AI定制路线`,
-           places: flatIds
-       });
-    }
-
-    if (newTrips.length > 0) {
-       await applyProposedTrips(newTrips);
-    } else {
-       alert('未能成功规划路线，请确保地点充足或稍后再试。');
-    }
-
-    setShowSmartPlanModal(false);
-    setSmartPlanPrompt('');
-    setIsSmartPlanning(false);
-  };
 
   const sendAiChatPlan = async () => {
+    if (aiRequestingRef.current) return;
     if (!aiChatInput.trim()) return;
     const userText = aiChatInput.trim();
     const cityPlaces = savedPlaces.filter((place) => place.city === currentCity);
@@ -707,6 +656,7 @@ export default function App() {
       return;
     }
     setIsSmartPlanning(true);
+    aiRequestingRef.current = true;
     setAiConversation((prev) => [...prev, { role: 'user', text: userText }]);
     setAiChatInput('');
 
@@ -735,6 +685,7 @@ export default function App() {
     if (!validated.ok) {
       setAiConversation((prev) => [...prev, { role: 'assistant', text: `提案校验失败：${validated.reason}，请换个需求重试。` }]);
       setIsSmartPlanning(false);
+      aiRequestingRef.current = false;
       return;
     }
     const proposalTrips = buildTripsFromPlan(validated.payload, cityPlaces);
@@ -752,6 +703,7 @@ export default function App() {
     setAiProposal({ trips: proposalTrips, summary: safeStr(parsed?.summary), goodieBag: safeGoodieBag });
     setAiConversation((prev) => [...prev, { role: 'assistant', text: safeStr(parsed?.summary) || `已生成 ${proposalTrips.length} 条可执行路线，确认后可一键加入。` }]);
     setIsSmartPlanning(false);
+    aiRequestingRef.current = false;
   };
 
   const tripPlaces = useMemo(() => (
@@ -854,19 +806,25 @@ export default function App() {
   // 云端同步写操作逻辑
   // ==========================================
   const handleSavePlace = async (placeData, stayOpen = false) => {
+    const placeName = safeStr(placeData.name) || '未知地点';
+    const normalizedAddress = safeStr(placeData.address) && safeStr(placeData.address) !== '地图标记地点'
+      ? safeStr(placeData.address)
+      : (safeStr(placeData.district) || '');
+    const dedupeKey = `${currentCity}::${placeName}`;
+    const existingByName = savedPlaces.find((place) => `${place.city}::${safeStr(place.name)}` === dedupeKey);
     const newPlace = {
-      id: placeData.id || Date.now().toString(),
-      name: safeStr(placeData.name) || '未知地点',
+      id: placeData.id || existingByName?.id || Date.now().toString(),
+      name: placeName,
       location: placeData.location,
       category: safeStr(placeData.category) || '景点',
-      address: safeStr(placeData.address) || '',
+      address: normalizedAddress,
       district: safeStr(placeData.district) || '',
       city: currentCity === '全国' ? '默认城市' : currentCity, 
       savedAt: Date.now()
     };
     setSavedPlaces(prev => {
-      const exists = prev.find(p => p.id === newPlace.id);
-      return exists ? prev.map(p => p.id === newPlace.id ? newPlace : p) : [newPlace, ...prev];
+      const exists = prev.find(p => p.id === newPlace.id || (p.city === newPlace.city && safeStr(p.name) === newPlace.name));
+      return exists ? prev.map(p => (p.id === exists.id ? { ...exists, ...newPlace } : p)) : [newPlace, ...prev];
     });
 
     if (user && !user.is_anonymous && supabase) {
@@ -1067,7 +1025,7 @@ export default function App() {
     const p1 = getLngLat(place.location);
     if (!p1) return [];
     
-    return savedPlaces
+    const deduped = savedPlaces
       .filter(p => p.id !== place.id)
       .map(p => {
         const p2 = getLngLat(p.location);
@@ -1075,17 +1033,31 @@ export default function App() {
         return { ...p, distance: window.AMap.GeometryUtil.distance(p1, p2) };
       })
       .filter(p => p.distance < 10000)
-      .sort((a, b) => a.distance - b.distance)
-      .slice(0, 5);
+      .sort((a, b) => a.distance - b.distance);
+    const unique = [];
+    const seen = new Set();
+    for (const item of deduped) {
+      const key = `${item.city}::${safeStr(item.name)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      unique.push(item);
+      if (unique.length >= 5) break;
+    }
+    return unique;
   };
 
-  const handleSmartRoute = () => {
-    const cityPlaces = savedPlaces.filter(p => p.city === currentCity);
-    if (cityPlaces.length < 2) {
-      alert(`${currentCity} 收藏的地点不足2个，无法规划路线，请先去发现页面多收藏几个吧！`);
-      return;
+  const addPlaceToActiveTrip = async (placeId) => {
+    if (!activeTripId) return;
+    let updatedPlaces = [];
+    setTrips((prevTrips) => prevTrips.map((trip) => {
+      if (trip.id !== activeTripId) return trip;
+      const nextPlaces = Array.from(new Set([...(trip.places || []), placeId]));
+      updatedPlaces = nextPlaces;
+      return { ...trip, places: nextPlaces };
+    }));
+    if (user && !user.is_anonymous && supabase && updatedPlaces.length > 0) {
+      try { await supabase.from('trips').update({ places: updatedPlaces }).eq('id', activeTripId); } catch (e) { logCloudError('Add place to trip', e); }
     }
-    setShowSmartPlanModal(true);
   };
 
   const filteredFavs = savedPlaces.filter(p => 
@@ -1185,7 +1157,7 @@ export default function App() {
       const segment = index > 0 ? segmentRoutes[index - 1] : null;
       const transitMinute = index > 0 ? Math.max(0, Math.round((segment?.time || 0) / 60)) : 0;
       const arriveMinute = accumulator.cursor + transitMinute;
-      const stayMinutes = estimateStayMinutes(place);
+      const stayMinutes = Math.max(15, Number(stayMinutesByPlace[place.id]) || estimateStayMinutes(place));
       const leaveMinute = arriveMinute + stayMinutes;
       accumulator.rows.push({
         id: place.id || `${index}`,
@@ -1292,6 +1264,9 @@ export default function App() {
                       mapStatus={mapStatus} 
                       mapErrorMsg={mapErrorMsg} 
                       currentCity={currentCity} 
+                      lockViewport={lockMapViewport}
+                      lockedZoom={lockedZoom}
+                      onZoomChange={setLockedZoom}
                       onMarkerClick={(p) => setSelectedPlace(p)}
                     />
                     {savedPlaces.length === 0 && mapStatus === 'success' && (
@@ -1365,16 +1340,6 @@ export default function App() {
                   <button onClick={() => setNewTripModalVisible(true)} className="w-10 h-10 rounded-full flex items-center justify-center bg-white shadow-sm active:scale-95"><Plus size={20} color={COLORS.primary}/></button>
                </div>
                <div className="flex-1 overflow-y-auto pb-24 space-y-4 pt-2 min-h-0">
-                 <div 
-                    onClick={handleSmartRoute} 
-                    className="bg-gradient-to-r from-blue-400 to-blue-600 p-5 rounded-3xl shadow-md text-white cursor-pointer active:scale-95 transition-transform"
-                  >
-                    <div className="flex items-center gap-2 mb-2">
-                      <Navigation size={20} />
-                      <h3 className="font-bold text-lg">智能路线规划</h3>
-                    </div>
-                    <p className="text-xs text-blue-100 opacity-90">一键串联你在 {currentCity} 收藏的所有地点并生成行程</p>
-                  </div>
                   <button
                     onClick={() => setAiChatOpen(true)}
                     className="w-full mt-3 bg-white p-4 rounded-2xl border border-[#ced6df] text-left shadow-sm active:scale-95 transition-transform"
@@ -1728,36 +1693,6 @@ export default function App() {
         )}
 
         {/* ==================================================== */}
-        {/* 🔥 全新：AI 智能行程约束排期 (支持多天) */}
-        {/* ==================================================== */}
-        {showSmartPlanModal && (
-          <div className="fixed inset-0 z-[140] flex items-center justify-center bg-black/40 backdrop-blur-sm p-6 animate-in fade-in">
-            <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl animate-in zoom-in-95">
-               <div className="flex items-center gap-2 mb-2">
-                 <Sparkles size={20} className="text-blue-500" />
-                 <h3 className="text-lg font-bold text-slate-800">AI 智能排期 (支持多天)</h3>
-               </div>
-               <p className="text-xs text-slate-400 mb-5">告诉 AI 你的特殊要求（例如：3天时间、带老人）。AI 将为你挑选顺路地点并自动生成每天的游玩顺序。</p>
-               <textarea
-                 autoFocus
-                 rows={3}
-                 placeholder="例如：我只有2天时间，带着老人，行程尽量轻松..."
-                 className="w-full px-4 py-3 rounded-xl bg-gray-50 border-none outline-none text-sm mb-6 focus:ring-2 focus:ring-blue-200 resize-none"
-                 value={smartPlanPrompt}
-                 onChange={e => setSmartPlanPrompt(e.target.value)}
-                 disabled={isSmartPlanning}
-               />
-               <div className="flex gap-3">
-                 <button disabled={isSmartPlanning} onClick={() => setShowSmartPlanModal(false)} className="flex-1 py-3 rounded-xl bg-gray-100 text-sm font-bold text-slate-600 active:scale-95">取消</button>
-                 <button disabled={isSmartPlanning} onClick={executeSmartPlan} className="flex-1 py-3 rounded-xl text-white text-sm font-bold active:scale-95 disabled:opacity-50 flex justify-center items-center gap-2" style={{ backgroundColor: COLORS.primary }}>
-                   {isSmartPlanning ? <Loader2 size={16} className="animate-spin" /> : '开始智能排期'}
-                 </button>
-               </div>
-            </div>
-          </div>
-        )}
-
-        {/* ==================================================== */}
         {/* 行程路线展示弹窗：分段交通与自由排序升级 */}
         {/* ==================================================== */}
         {showRoutePanel && activeTripId && (
@@ -1777,26 +1712,72 @@ export default function App() {
                    isRoute={true} 
                    mapStatus={mapStatus} 
                    currentCity={currentCity}
+                   lockViewport={lockMapViewport}
+                   lockedZoom={lockedZoom}
+                   onZoomChange={setLockedZoom}
                    routeModes={segmentModes} 
                  />
 
                  <div className="bg-gray-50 rounded-3xl p-5 border border-gray-100">
                     <div className="mb-5 bg-white border border-[#e9e7e3] rounded-2xl p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <h3 className="font-bold text-slate-700 text-sm">从收藏添加地点</h3>
+                        <span className="text-[10px] text-slate-400">可直接加入当前行程</span>
+                      </div>
+                      <div className="flex gap-2 overflow-x-auto hide-scrollbar pb-1">
+                        {savedPlaces
+                          .slice(0, 30)
+                          .map((place) => {
+                            const added = tripPlaces.some((tripPlace) => tripPlace.id === place.id);
+                            return (
+                              <button
+                                key={`add_trip_${place.id}`}
+                                disabled={added}
+                                onClick={() => addPlaceToActiveTrip(place.id)}
+                                className={`shrink-0 px-3 py-2 rounded-xl text-xs border ${added ? 'bg-gray-100 text-slate-400 border-gray-100' : 'bg-[#e9f3fb] text-[#4f7ca0] border-[#ced6df]'}`}
+                              >
+                                {safeStr(place.name)}
+                              </button>
+                            );
+                          })}
+                      </div>
+                    </div>
+                    <div className="mb-5 bg-white border border-[#e9e7e3] rounded-2xl p-4">
                       <div className="flex items-center justify-between mb-3">
                         <h3 className="font-bold text-slate-700 text-sm">时间轴（可调起始时间）</h3>
-                        <input
-                          type="time"
-                          value={dayStartAt}
-                          onChange={(event) => setDayStartAt(event.target.value)}
-                          className="px-2 py-1.5 rounded-lg bg-[#f4eeeb] text-xs font-semibold text-slate-600 outline-none"
-                        />
+                        <div className="flex items-center gap-2">
+                          <label className="text-[11px] text-slate-500 flex items-center gap-1">
+                            <input type="checkbox" checked={lockMapViewport} onChange={(event) => setLockMapViewport(event.target.checked)} />
+                            锁定地图缩放({lockedZoom.toFixed(1)}x)
+                          </label>
+                          <input
+                            type="time"
+                            value={dayStartAt}
+                            onChange={(event) => setDayStartAt(event.target.value)}
+                            className="px-2 py-1.5 rounded-lg bg-[#f4eeeb] text-xs font-semibold text-slate-600 outline-none"
+                          />
+                        </div>
                       </div>
                       <div className="space-y-2 max-h-40 overflow-y-auto">
                         {timelineRows.map((row) => (
                           <div key={`timeline_${row.id}`} className="flex items-center justify-between text-xs bg-[#f9f7f2] rounded-xl px-3 py-2">
                             <div className="min-w-0 pr-2">
                               <p className="font-bold text-slate-700 truncate">{safeStr(row.place.name)}</p>
-                              <p className="text-[10px] text-slate-500 mt-0.5">停留约 {row.stayMinutes} 分钟</p>
+                              <div className="text-[10px] text-slate-500 mt-0.5 flex items-center gap-1">
+                                <span>停留</span>
+                                <input
+                                  type="number"
+                                  min={15}
+                                  step={5}
+                                  value={Number(stayMinutesByPlace[row.place.id]) || row.stayMinutes}
+                                  onChange={(event) => {
+                                    const value = Math.max(15, Number(event.target.value) || 15);
+                                    setStayMinutesByPlace((prev) => ({ ...prev, [row.place.id]: value }));
+                                  }}
+                                  className="w-16 px-1 py-0.5 rounded bg-white border border-[#e9e7e3] text-slate-600"
+                                />
+                                <span>分钟</span>
+                              </div>
                             </div>
                             <div className="text-right text-slate-600 shrink-0">
                               <p>{row.arriveAt} 到达</p>
