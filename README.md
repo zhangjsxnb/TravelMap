@@ -30,7 +30,49 @@ VITE_SUPABASE_KEY=
 VITE_AI_PLAN_API_URL=
 ```
 
-`VITE_AI_PLAN_API_URL` 应指向你自己的后端代理接口。前端会发送 `{ "prompt": "..." }`，接口可返回 `{ "content": "..." }`、`{ "text": "..." }` 或兼容 OpenAI/DeepSeek 的 `choices[0].message.content`。
+`VITE_AI_PLAN_API_URL` 应指向你自己的后端代理接口（推荐由后端再去调用阿里云模型，避免前端泄露 key）。
+
+## AI 接口契约（建议）
+
+前端会以 `POST` JSON 请求 AI 规划接口，典型请求体：
+
+```json
+{
+  "action": "plan",
+  "prompt": "我想周末轻松逛1天，咖啡店+公园",
+  "city": "上海",
+  "places": [
+    { "id": "p1", "name": "武康大楼", "category": "景点", "address": "..." }
+  ],
+  "currentTrip": null,
+  "preferences": {
+    "dayStartAt": "10:00",
+    "targetStopsPerDay": 6
+  }
+}
+```
+
+后端返回建议优先用下面结构（最稳）：
+
+```json
+{
+  "proposal": {
+    "summary": "轻松路线，减少跨区移动",
+    "routes": [
+      { "title": "Day 1", "placeIds": ["p1", "p2", "p3"] }
+    ],
+    "goodieBag": [
+      { "name": "某咖啡馆", "hint": "适合下午休息" }
+    ]
+  }
+}
+```
+
+兼容返回（旧格式）也可继续工作：
+
+- `{ "content": "..." }`
+- `{ "text": "..." }`
+- OpenAI 兼容：`{ "choices": [{ "message": { "content": "..." } }] }`
 
 ## 常用脚本
 

@@ -59,12 +59,14 @@ const AI_PLAN_API_URL = import.meta.env.VITE_AI_PLAN_API_URL || '';
 
 const COLORS = {
   white: '#FFFFFF',
-  bg: '#FCF8E7',
+  bg: '#F4EEEB',
   light: '#DFF2FC',
-  medium: '#A6D0F1',
+  medium: '#CED6DF',
   primary: '#95C2E2',
-  textDark: '#334155',
-  textLight: '#64748B'
+  accent: '#EACDC7',
+  neutral: '#E9E7E3',
+  textDark: '#455A70',
+  textLight: '#6E7C8A'
 };
 
 const HOT_CITIES = ['北京', '上海', '广州', '深圳', '成都', '重庆', '杭州', '西安', '武汉', '长春', '长沙', '南京'];
@@ -73,6 +75,39 @@ const safeStr = (val) => {
   if (typeof val === 'string') return val;
   if (typeof val === 'number') return String(val);
   return '';
+};
+
+const toMinute = (timeText) => {
+  const [hour = '10', minute = '0'] = safeStr(timeText).split(':');
+  const safeHour = Math.max(0, Math.min(23, Number(hour) || 10));
+  const safeMinute = Math.max(0, Math.min(59, Number(minute) || 0));
+  return safeHour * 60 + safeMinute;
+};
+
+const toTimeText = (totalMinute) => {
+  const safe = Math.max(0, totalMinute);
+  const hour = String(Math.floor(safe / 60)).padStart(2, '0');
+  const minute = String(safe % 60).padStart(2, '0');
+  return `${hour}:${minute}`;
+};
+
+const estimateStayMinutes = (place) => {
+  const name = safeStr(place?.name);
+  const category = safeStr(place?.category);
+  const sourceText = `${name}${category}`;
+  if (/博物馆|美术馆|展览|古镇|公园|景区/.test(sourceText)) return 120;
+  if (/商场|步行街|夜市/.test(sourceText)) return 90;
+  if (/咖啡|茶|餐厅|火锅|烧烤|饭店/.test(sourceText)) return 75;
+  return 90;
+};
+
+const normalizeGoodieItem = (item) => {
+  if (!item) return null;
+  if (typeof item === 'string') return { name: item.trim(), hint: '' };
+  const name = safeStr(item.name).trim();
+  const hint = safeStr(item.hint).trim();
+  if (!name) return null;
+  return { name, hint };
 };
 
 const logCloudError = (action, error) => {
@@ -269,6 +304,11 @@ export default function App() {
   const [showSmartPlanModal, setShowSmartPlanModal] = useState(false);
   const [smartPlanPrompt, setSmartPlanPrompt] = useState('');
   const [isSmartPlanning, setIsSmartPlanning] = useState(false);
+  const [aiChatOpen, setAiChatOpen] = useState(false);
+  const [aiChatInput, setAiChatInput] = useState('');
+  const [aiConversation, setAiConversation] = useState([]);
+  const [aiProposal, setAiProposal] = useState(null);
+  const [dayStartAt, setDayStartAt] = useState(localStorage.getItem('travel_day_start_at') || '10:00');
 
   const [favSearchQuery, setFavSearchQuery] = useState('');
   const [routeBuilderStart, setRouteBuilderStart] = useState(null);
@@ -291,6 +331,7 @@ export default function App() {
   useEffect(() => { localStorage.setItem('travel_trips', JSON.stringify(trips)); }, [trips]);
   useEffect(() => { localStorage.setItem('travel_memos', JSON.stringify(globalMemos)); }, [globalMemos]);
   useEffect(() => { localStorage.setItem('travel_memo_template', JSON.stringify(memoTemplate)); }, [memoTemplate]);
+  useEffect(() => { localStorage.setItem('travel_day_start_at', dayStartAt); }, [dayStartAt]);
 
   // --- 云端数据同步 ---
   useEffect(() => {
@@ -420,7 +461,7 @@ export default function App() {
   // ==========================================
   // AI 核心调用逻辑 (DeepSeek)
   // ==========================================
-  const callDeepSeek = async (prompt) => {
+  const callAiPlanner = async (payload) => {
     if (!AI_PLAN_API_URL) {
       alert("请先配置 VITE_AI_PLAN_API_URL，并通过后端代理调用 AI，避免在前端暴露密钥。");
       return null;
@@ -431,13 +472,13 @@ export default function App() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ prompt })
+        body: JSON.stringify(payload)
       });
       if (!res.ok) throw new Error(`AI proxy returned ${res.status}`);
       const data = await res.json();
-      return (data.content || data.text || data.choices?.[0]?.message?.content || '').trim();
+      return data;
     } catch (e) {
-      console.error("DeepSeek API Error:", e);
+      console.error("AI Planner API Error:", e);
       alert("AI 调用失败，请检查代理服务或网络");
       return null;
     }
@@ -446,10 +487,14 @@ export default function App() {
   const parseDeepSeekJSON = (text) => {
     if (!text) return null;
     let cleaned = text.replace(/```json/gi, '').replace(/```/g, '').trim();
-    const firstBracket = cleaned.indexOf('[');
-    const lastBracket = cleaned.lastIndexOf(']');
-    if (firstBracket !== -1 && lastBracket !== -1) {
-        cleaned = cleaned.substring(firstBracket, lastBracket + 1);
+    const firstArray = cleaned.indexOf('[');
+    const lastArray = cleaned.lastIndexOf(']');
+    const firstObj = cleaned.indexOf('{');
+    const lastObj = cleaned.lastIndexOf('}');
+    if (firstObj !== -1 && lastObj !== -1 && (firstArray === -1 || firstObj < firstArray)) {
+      cleaned = cleaned.substring(firstObj, lastObj + 1);
+    } else if (firstArray !== -1 && lastArray !== -1) {
+      cleaned = cleaned.substring(firstArray, lastArray + 1);
     }
     try {
       return JSON.parse(cleaned);
@@ -457,6 +502,120 @@ export default function App() {
       console.error("JSON parse error:", e);
       return null;
     }
+  };
+
+  const normalizePlanPayload = (payload) => {
+    if (!payload) return null;
+    if (Array.isArray(payload)) {
+      return {
+        routes: [{ title: `${currentCity} AI定制路线`, placeIds: payload }]
+      };
+    }
+    if (Array.isArray(payload.routes)) return payload;
+    return null;
+  };
+
+  const validatePlanPayload = (payload, cityPlaces) => {
+    if (!payload || !Array.isArray(payload.routes)) return { ok: false, reason: 'AI 未返回 routes 数组' };
+    const validIds = new Set(cityPlaces.map((place) => place.id));
+    const safeRoutes = payload.routes.map((route, index) => {
+      const title = safeStr(route?.title) || `Day ${index + 1}`;
+      const placeIds = Array.isArray(route?.placeIds) ? route.placeIds.filter((id) => validIds.has(id)) : [];
+      return { title, placeIds };
+    }).filter((route) => route.placeIds.length > 0);
+    if (!safeRoutes.length) return { ok: false, reason: 'AI 路线不包含有效收藏地点' };
+    return { ok: true, payload: { ...payload, routes: safeRoutes } };
+  };
+
+  const buildTripsFromPlan = (planPayload, cityPlaces) => {
+    const safeRoutes = (planPayload?.routes || []).map((route, index) => {
+      const ids = (route?.placeIds || []).filter((id) => cityPlaces.some((place) => place.id === id));
+      if (ids.length === 0) return null;
+      return {
+        id: `trip_${Date.now()}_${index}`,
+        name: safeStr(route?.title) || `${currentCity} AI定制 - Day ${index + 1}`,
+        places: ids
+      };
+    }).filter(Boolean);
+    return safeRoutes;
+  };
+
+  const applyProposedTrips = async (newTrips) => {
+    if (!newTrips?.length) {
+      alert('AI 方案中没有可执行的收藏地点，请先补充收藏。');
+      return;
+    }
+    const tripsToAdd = [...newTrips].reverse();
+    setTrips((prev) => [...tripsToAdd, ...prev]);
+    if (user && !user.is_anonymous && supabase) {
+      try {
+        const cloudTrips = newTrips.map((trip) => ({ ...trip, user_id: user.id }));
+        await supabase.from('trips').upsert(cloudTrips);
+      } catch (error) {
+        logCloudError('Sync AI trips', error);
+      }
+    }
+    setActiveTripId(newTrips[newTrips.length - 1].id);
+    setShowRoutePanel(true);
+    setActiveTab('lists');
+  };
+
+  const resolveSuggestionWithAMap = async (suggestionName) => {
+    if (!window.AMap?.PlaceSearch) return null;
+    return new Promise((resolve) => {
+      try {
+        const search = new window.AMap.PlaceSearch({
+          city: currentCity === '全国' ? '全国' : currentCity,
+          citylimit: currentCity !== '全国',
+          pageSize: 1
+        });
+        search.search(suggestionName, (status, result) => {
+          if (status !== 'complete' || !result?.poiList?.pois?.length) {
+            resolve(null);
+            return;
+          }
+          const poi = result.poiList.pois[0];
+          const lngLat = poi?.location ? { lng: poi.location.lng, lat: poi.location.lat } : null;
+          resolve({
+            name: safeStr(poi.name) || suggestionName,
+            address: safeStr(poi.address),
+            district: safeStr(poi.pname) + safeStr(poi.cityname) + safeStr(poi.adname),
+            category: safeStr(poi.type) || 'AI推荐',
+            location: lngLat
+          });
+        });
+      } catch {
+        resolve(null);
+      }
+    });
+  };
+
+  const saveSuggestedPlace = async (suggestion) => {
+    const name = safeStr(suggestion?.name);
+    if (!name) return null;
+    const existing = savedPlaces.find((place) => safeStr(place.name) === name && place.city === currentCity);
+    if (existing) return existing.id;
+    const amapResolved = await resolveSuggestionWithAMap(name);
+    if (!amapResolved) return null;
+    const newPlace = {
+      id: `ai_place_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      name: amapResolved.name,
+      location: amapResolved.location,
+      category: amapResolved.category,
+      address: amapResolved.address || safeStr(suggestion?.hint),
+      district: amapResolved.district,
+      city: currentCity === '全国' ? '默认城市' : currentCity,
+      savedAt: Date.now()
+    };
+    setSavedPlaces((prev) => [newPlace, ...prev]);
+    if (user && !user.is_anonymous && supabase) {
+      try {
+        await supabase.from('places').upsert({ ...newPlace, user_id: user.id });
+      } catch (error) {
+        logCloudError('Save suggested place', error);
+      }
+    }
+    return newPlace.id;
   };
 
   const executeSmartPlan = async () => {
@@ -468,8 +627,23 @@ export default function App() {
     请根据用户要求，挑选合适的地点并排好顺路的游玩顺序。
     【强制要求】：绝不能输出任何文字说明，直接返回一个包含选中地点id的 JSON 数组（一维数组即可，如 ["id1", "id2"]）。`;
 
-    const routeResult = await callDeepSeek(routePrompt);
-    let parsedResult = parseDeepSeekJSON(routeResult || '');
+    const routeResult = await callAiPlanner({
+      action: 'plan',
+      prompt: routePrompt,
+      city: currentCity,
+      places: cityPlaces.map((place) => ({
+        id: place.id,
+        name: place.name,
+        category: place.category,
+        address: place.address
+      })),
+      preferences: {
+        dayStartAt,
+        targetStopsPerDay: 6
+      }
+    });
+    const routeText = routeResult?.content || routeResult?.text || routeResult?.choices?.[0]?.message?.content || '';
+    let parsedResult = parseDeepSeekJSON(routeText || '');
 
     // 无论大模型返回什么格式，都压平为一维纯 ID 数组
     let flatIds = [];
@@ -514,25 +688,69 @@ export default function App() {
     }
 
     if (newTrips.length > 0) {
-       const tripsToAdd = [...newTrips].reverse(); // 保证 Day 1 在最上面
-       setTrips(prev => [...tripsToAdd, ...prev]);
-       
-       if (user && !user.is_anonymous && supabase) {
-          try {
-             const cloudTrips = newTrips.map(t => ({ ...t, user_id: user.id }));
-             await supabase.from('trips').upsert(cloudTrips);
-          } catch(e) { logCloudError('Sync AI trips', e); }
-       }
-       
-       setActiveTripId(newTrips[newTrips.length - 1].id); // 选中 Day 1
-       setShowRoutePanel(true);
-       setActiveTab('lists');
+       await applyProposedTrips(newTrips);
     } else {
        alert('未能成功规划路线，请确保地点充足或稍后再试。');
     }
 
     setShowSmartPlanModal(false);
     setSmartPlanPrompt('');
+    setIsSmartPlanning(false);
+  };
+
+  const sendAiChatPlan = async () => {
+    if (!aiChatInput.trim()) return;
+    const userText = aiChatInput.trim();
+    const cityPlaces = savedPlaces.filter((place) => place.city === currentCity);
+    if (cityPlaces.length < 2) {
+      alert('当前城市收藏太少，至少收藏 2 个地点后再试。');
+      return;
+    }
+    setIsSmartPlanning(true);
+    setAiConversation((prev) => [...prev, { role: 'user', text: userText }]);
+    setAiChatInput('');
+
+    const answer = await callAiPlanner({
+      action: 'plan',
+      prompt: userText,
+      city: currentCity,
+      places: cityPlaces.map((place) => ({
+        id: place.id,
+        name: place.name,
+        category: place.category,
+        address: place.address
+      })),
+      currentTrip: activeTripId ? (trips.find((trip) => trip.id === activeTripId) || null) : null,
+      preferences: {
+        dayStartAt,
+        targetStopsPerDay: 6
+      }
+    });
+    const contentText = answer?.content || answer?.text || answer?.choices?.[0]?.message?.content || '';
+    const parsed = answer?.proposal || parseDeepSeekJSON(contentText || '') || (() => {
+      try { return JSON.parse(contentText || '{}'); } catch { return null; }
+    })();
+    const normalized = normalizePlanPayload(parsed);
+    const validated = validatePlanPayload(normalized, cityPlaces);
+    if (!validated.ok) {
+      setAiConversation((prev) => [...prev, { role: 'assistant', text: `提案校验失败：${validated.reason}，请换个需求重试。` }]);
+      setIsSmartPlanning(false);
+      return;
+    }
+    const proposalTrips = buildTripsFromPlan(validated.payload, cityPlaces);
+
+    if (!proposalTrips.length) {
+      setAiConversation((prev) => [...prev, { role: 'assistant', text: '我没有拿到可执行路线，请换个需求再试。' }]);
+      setIsSmartPlanning(false);
+      return;
+    }
+
+    const safeGoodieBag = (Array.isArray(parsed?.goodieBag) ? parsed.goodieBag : [])
+      .map(normalizeGoodieItem)
+      .filter(Boolean)
+      .slice(0, 5);
+    setAiProposal({ trips: proposalTrips, summary: safeStr(parsed?.summary), goodieBag: safeGoodieBag });
+    setAiConversation((prev) => [...prev, { role: 'assistant', text: safeStr(parsed?.summary) || `已生成 ${proposalTrips.length} 条可执行路线，确认后可一键加入。` }]);
     setIsSmartPlanning(false);
   };
 
@@ -961,6 +1179,27 @@ export default function App() {
 
   const totalDist = segmentRoutes.reduce((acc, curr) => acc + (curr?.distance || 0), 0);
   const totalTime = segmentRoutes.reduce((acc, curr) => acc + (curr?.time || 0), 0);
+  const timelineRows = (() => {
+    const initialMinute = toMinute(dayStartAt);
+    const result = tripPlaces.reduce((accumulator, place, index) => {
+      const segment = index > 0 ? segmentRoutes[index - 1] : null;
+      const transitMinute = index > 0 ? Math.max(0, Math.round((segment?.time || 0) / 60)) : 0;
+      const arriveMinute = accumulator.cursor + transitMinute;
+      const stayMinutes = estimateStayMinutes(place);
+      const leaveMinute = arriveMinute + stayMinutes;
+      accumulator.rows.push({
+        id: place.id || `${index}`,
+        place,
+        arriveAt: toTimeText(arriveMinute),
+        leaveAt: toTimeText(leaveMinute),
+        stayMinutes,
+        transitMinute
+      });
+      accumulator.cursor = leaveMinute;
+      return accumulator;
+    }, { rows: [], cursor: initialMinute });
+    return result.rows;
+  })();
 
   return (
     <div className="min-h-[100dvh] w-full flex justify-center bg-gray-100 sm:bg-[#f0f4f8]">
@@ -1126,7 +1365,7 @@ export default function App() {
                   <button onClick={() => setNewTripModalVisible(true)} className="w-10 h-10 rounded-full flex items-center justify-center bg-white shadow-sm active:scale-95"><Plus size={20} color={COLORS.primary}/></button>
                </div>
                <div className="flex-1 overflow-y-auto pb-24 space-y-4 pt-2 min-h-0">
-                  <div 
+                 <div 
                     onClick={handleSmartRoute} 
                     className="bg-gradient-to-r from-blue-400 to-blue-600 p-5 rounded-3xl shadow-md text-white cursor-pointer active:scale-95 transition-transform"
                   >
@@ -1136,6 +1375,13 @@ export default function App() {
                     </div>
                     <p className="text-xs text-blue-100 opacity-90">一键串联你在 {currentCity} 收藏的所有地点并生成行程</p>
                   </div>
+                  <button
+                    onClick={() => setAiChatOpen(true)}
+                    className="w-full mt-3 bg-white p-4 rounded-2xl border border-[#ced6df] text-left shadow-sm active:scale-95 transition-transform"
+                  >
+                    <p className="text-sm font-bold text-slate-700">AI 对话规划</p>
+                    <p className="text-[11px] text-slate-500 mt-1">输入需求后先生成提案，确认再一键应用，稳定可控</p>
+                  </button>
 
                   <div className="h-px bg-gray-200 my-4"></div>
 
@@ -1383,6 +1629,104 @@ export default function App() {
           </div>
         )}
 
+        {aiChatOpen && (
+          <div className="fixed inset-0 z-[165] flex items-end bg-black/40 backdrop-blur-sm animate-in fade-in">
+            <div className="bg-[#f8f6f2] w-full rounded-t-3xl p-6 pb-safe max-h-[85vh] flex flex-col">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="text-lg font-bold text-slate-800">AI 对话规划</h3>
+                  <p className="text-[11px] text-slate-500 mt-1">先生成提案，再确认应用，避免不可执行结果</p>
+                </div>
+                <button onClick={() => setAiChatOpen(false)} className="p-2 rounded-full bg-white"><X size={16} /></button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+                {aiConversation.length === 0 ? (
+                  <div className="text-xs text-slate-500 bg-white rounded-xl p-3 border border-[#e9e7e3]">
+                    示例：我想周末轻松逛1天，咖啡店加公园，最多6个点，步行少一点。
+                  </div>
+                ) : null}
+                {aiConversation.map((item, index) => (
+                  <div key={`chat_${index}`} className={`p-3 rounded-xl text-xs ${item.role === 'user' ? 'bg-[#ced6df] text-slate-700 ml-6' : 'bg-white text-slate-700 mr-6 border border-[#e9e7e3]'}`}>
+                    {item.text}
+                  </div>
+                ))}
+
+                {aiProposal ? (
+                  <div className="bg-white border border-[#ced6df] rounded-2xl p-4">
+                    <p className="text-sm font-bold text-slate-700 mb-2">提案预览</p>
+                    <p className="text-xs text-slate-500 mb-3">{aiProposal.summary || '已生成可执行行程提案。'}</p>
+                    <div className="space-y-2 mb-3">
+                      {aiProposal.trips.map((trip) => (
+                        <div key={trip.id} className="text-xs bg-[#f9f7f2] rounded-xl px-3 py-2 text-slate-600">
+                          {trip.name} · {trip.places.length} 个节点
+                        </div>
+                      ))}
+                    </div>
+                    {aiProposal.goodieBag?.length > 0 ? (
+                      <div className="mb-3">
+                        <p className="text-xs font-bold text-slate-600 mb-1">福袋推荐（应用时自动进收藏）</p>
+                        <div className="flex flex-wrap gap-2">
+                          {aiProposal.goodieBag.map((item, index) => (
+                            <span key={`goodie_${index}`} className="text-[11px] px-2 py-1 rounded-full bg-[#eacdc7] text-slate-700">{safeStr(item.name)}</span>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                    <button
+                      onClick={async () => {
+                        let failedGoodieCount = 0;
+                        if (aiProposal.goodieBag?.length) {
+                          const extraIds = [];
+                          for (const suggestion of aiProposal.goodieBag) {
+                            const placeId = await saveSuggestedPlace(suggestion);
+                            if (placeId) extraIds.push(placeId);
+                            else failedGoodieCount += 1;
+                          }
+                          if (extraIds.length) {
+                            const enhancedTrips = aiProposal.trips.map((trip, index) => index === 0 ? { ...trip, places: [...trip.places, ...extraIds] } : trip);
+                            await applyProposedTrips(enhancedTrips);
+                          } else {
+                            await applyProposedTrips(aiProposal.trips);
+                          }
+                        } else {
+                          await applyProposedTrips(aiProposal.trips);
+                        }
+                        if (failedGoodieCount > 0) {
+                          alert(`有 ${failedGoodieCount} 个福袋地点未能在高德解析，已跳过，不影响主行程。`);
+                        }
+                        setAiProposal(null);
+                        setAiChatOpen(false);
+                      }}
+                      className="w-full py-3 rounded-xl text-white text-sm font-bold"
+                      style={{ backgroundColor: COLORS.primary }}
+                    >
+                      应用提案到行程
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="mt-4 flex gap-2">
+                <input
+                  value={aiChatInput}
+                  onChange={(event) => setAiChatInput(event.target.value)}
+                  placeholder="告诉AI你的偏好：天数、节奏、预算、体力..."
+                  className="flex-1 px-4 py-3 rounded-xl bg-white border border-[#ced6df] outline-none text-sm"
+                />
+                <button
+                  disabled={isSmartPlanning || !aiChatInput.trim()}
+                  onClick={sendAiChatPlan}
+                  className="px-5 rounded-xl text-white text-sm font-bold disabled:opacity-50"
+                  style={{ backgroundColor: COLORS.primary }}
+                >
+                  发送
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ==================================================== */}
         {/* 🔥 全新：AI 智能行程约束排期 (支持多天) */}
         {/* ==================================================== */}
@@ -1437,6 +1781,31 @@ export default function App() {
                  />
 
                  <div className="bg-gray-50 rounded-3xl p-5 border border-gray-100">
+                    <div className="mb-5 bg-white border border-[#e9e7e3] rounded-2xl p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="font-bold text-slate-700 text-sm">时间轴（可调起始时间）</h3>
+                        <input
+                          type="time"
+                          value={dayStartAt}
+                          onChange={(event) => setDayStartAt(event.target.value)}
+                          className="px-2 py-1.5 rounded-lg bg-[#f4eeeb] text-xs font-semibold text-slate-600 outline-none"
+                        />
+                      </div>
+                      <div className="space-y-2 max-h-40 overflow-y-auto">
+                        {timelineRows.map((row) => (
+                          <div key={`timeline_${row.id}`} className="flex items-center justify-between text-xs bg-[#f9f7f2] rounded-xl px-3 py-2">
+                            <div className="min-w-0 pr-2">
+                              <p className="font-bold text-slate-700 truncate">{safeStr(row.place.name)}</p>
+                              <p className="text-[10px] text-slate-500 mt-0.5">停留约 {row.stayMinutes} 分钟</p>
+                            </div>
+                            <div className="text-right text-slate-600 shrink-0">
+                              <p>{row.arriveAt} 到达</p>
+                              <p className="text-[10px] text-slate-500">{row.leaveAt} 离开</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                     <div className="flex justify-between items-center mb-5">
                        <h3 className="font-bold text-slate-700 text-base">节点与交通详情</h3>
                        <span className="text-[10px] bg-blue-100 text-blue-600 px-2 py-0.5 rounded font-bold">可调整顺序</span>
