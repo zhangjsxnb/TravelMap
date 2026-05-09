@@ -1,16 +1,41 @@
-# React + Vite
+# TravelMap
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+TravelMap 是一个基于 React + Vite 的旅行地图 PWA，用于收藏地点、规划行程、管理旅行备忘，并支持 Supabase 云同步。
 
-Currently, two official plugins are available:
+## 功能
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- 高德地图地点搜索、地图展示、城市切换与路线规划
+- 收藏地点并按城市分组管理
+- 创建自定义行程，调整地点顺序和分段交通方式
+- 旅行备忘清单与常用模板
+- Supabase 邮箱验证码登录、游客模式和云端同步
+- 通过后端代理接入 AI 行程规划，避免在前端暴露 AI 密钥
 
-## React Compiler
+## 本地开发
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+```bash
+npm install
+npm run dev
+```
 
-## Expanding the ESLint configuration
+## 环境变量
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+在 `.env` 中配置：
+
+```env
+VITE_AMAP_KEY=
+VITE_AMAP_JSCODE=
+VITE_SUPABASE_URL=
+VITE_SUPABASE_KEY=
+VITE_AI_PLAN_API_URL=
+```
+
+`VITE_AI_PLAN_API_URL` 应指向你自己的后端代理接口。前端会发送 `{ "prompt": "..." }`，接口可返回 `{ "content": "..." }`、`{ "text": "..." }` 或兼容 OpenAI/DeepSeek 的 `choices[0].message.content`。
+
+## 常用脚本
+
+```bash
+npm run lint
+npm run build
+npm run preview
+```

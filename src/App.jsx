@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Map as MapIcon, List, User, Search, MapPin, Plus, Heart, 
-  Navigation, Calendar, CheckCircle2, Circle, 
-  ChevronRight, ArrowRight, X, Sparkles, Trash2, ClipboardList,
+  Navigation, CheckCircle2, Circle, 
+  X, Sparkles, Trash2, ClipboardList,
   Mail, KeyRound, Loader2, LogOut, AlertCircle, ChevronDown, ChevronLeft, LocateFixed,
   Star, ChevronUp, Car, Bus, Footprints, Bike, Settings, Edit2, CornerDownLeft
 } from 'lucide-react';
@@ -46,16 +46,16 @@ create table public.memos (
 // 1. API 密钥配置区 
 // ==========================================
 const AMAP_CONFIG = {
-  key: '6a06a2de3f4cc4a4a7a21a12e85aa48f', 
-  jscode: 'ec662b0cbf8e9b00dfd0642742c51808',  
+  key: import.meta.env.VITE_AMAP_KEY || '', 
+  jscode: import.meta.env.VITE_AMAP_JSCODE || '',  
 };
 
 const SUPABASE_CONFIG = {
-  url: 'https://ncbzklntlyiqvpmezpnk.supabase.co', // 👉 必填：请填入您的 Supabase URL
-  key: 'sb_publishable_OsNM8K_bgwUQhGosWMrCfA_Lt4k93DL', // 👉 必填：请填入您的 Supabase anon key
+  url: import.meta.env.VITE_SUPABASE_URL || '',
+  key: import.meta.env.VITE_SUPABASE_KEY || '',
 };
 
-const DEEPSEEK_API_KEY = 'sk-184f5a31a8e841a5abb427a82481a763'; // 👉 必填：请填入您的 DeepSeek API 密钥 (sk-...)
+const AI_PLAN_API_URL = import.meta.env.VITE_AI_PLAN_API_URL || '';
 
 const COLORS = {
   white: '#FFFFFF',
@@ -73,6 +73,10 @@ const safeStr = (val) => {
   if (typeof val === 'string') return val;
   if (typeof val === 'number') return String(val);
   return '';
+};
+
+const logCloudError = (action, error) => {
+  console.error(`${action} failed:`, error);
 };
 
 // 安全解析经纬度，防止未定义的数据格式导致 Script Error
@@ -218,21 +222,21 @@ export default function App() {
     try {
       const local = localStorage.getItem('travel_saved_places');
       return local ? JSON.parse(local) : [];
-    } catch(e) { return []; }
+    } catch { return []; }
   });
   
   const [trips, setTrips] = useState(() => {
     try {
       const local = localStorage.getItem('travel_trips');
       return local ? JSON.parse(local) : [];
-    } catch(e) { return []; }
+    } catch { return []; }
   });
   
   const [globalMemos, setGlobalMemos] = useState(() => {
     try {
       const local = localStorage.getItem('travel_memos');
       return local ? JSON.parse(local) : [{ id: '1', text: '身份证及重要证件', done: false }];
-    } catch(e) { return [{ id: '1', text: '身份证及重要证件', done: false }]; }
+    } catch { return [{ id: '1', text: '身份证及重要证件', done: false }]; }
   });
   const [newMemoText, setNewMemoText] = useState('');
   
@@ -240,7 +244,7 @@ export default function App() {
     try {
       const local = localStorage.getItem('travel_memo_template');
       return local ? JSON.parse(local) : ['身份证', '充电宝', '纸巾', '钥匙', '耳机'];
-    } catch(e) { return ['身份证', '充电宝', '纸巾', '钥匙', '耳机']; }
+    } catch { return ['身份证', '充电宝', '纸巾', '钥匙', '耳机']; }
   });
   const [showMemoTemplateModal, setShowMemoTemplateModal] = useState(false);
   const [newTemplateItem, setNewTemplateItem] = useState('');
@@ -417,28 +421,24 @@ export default function App() {
   // AI 核心调用逻辑 (DeepSeek)
   // ==========================================
   const callDeepSeek = async (prompt) => {
-    if (!DEEPSEEK_API_KEY) {
-      alert("请先在代码顶部配置 DEEPSEEK_API_KEY");
+    if (!AI_PLAN_API_URL) {
+      alert("请先配置 VITE_AI_PLAN_API_URL，并通过后端代理调用 AI，避免在前端暴露密钥。");
       return null;
     }
     try {
-      const res = await fetch('https://api.deepseek.com/chat/completions', {
+      const res = await fetch(AI_PLAN_API_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
         },
-        body: JSON.stringify({
-          model: 'deepseek-chat',
-          messages: [{ role: 'user', content: prompt }],
-          temperature: 0.3
-        })
+        body: JSON.stringify({ prompt })
       });
+      if (!res.ok) throw new Error(`AI proxy returned ${res.status}`);
       const data = await res.json();
-      return data.choices[0].message.content.trim();
+      return (data.content || data.text || data.choices?.[0]?.message?.content || '').trim();
     } catch (e) {
       console.error("DeepSeek API Error:", e);
-      alert("AI 调用失败，请检查网络或密钥");
+      alert("AI 调用失败，请检查代理服务或网络");
       return null;
     }
   };
@@ -521,7 +521,7 @@ export default function App() {
           try {
              const cloudTrips = newTrips.map(t => ({ ...t, user_id: user.id }));
              await supabase.from('trips').upsert(cloudTrips);
-          } catch(e) {}
+          } catch(e) { logCloudError('Sync AI trips', e); }
        }
        
        setActiveTripId(newTrips[newTrips.length - 1].id); // 选中 Day 1
@@ -536,9 +536,12 @@ export default function App() {
     setIsSmartPlanning(false);
   };
 
-  const tripPlaces = showRoutePanel && activeTripId 
-    ? (trips.find(t => t.id === activeTripId)?.places?.map(pid => savedPlaces.find(p => p.id === pid)).filter(Boolean) || [])
-    : [];
+  const tripPlaces = useMemo(() => (
+    showRoutePanel && activeTripId
+      ? (trips.find(t => t.id === activeTripId)?.places?.map(pid => savedPlaces.find(p => p.id === pid)).filter(Boolean) || [])
+      : []
+  ), [activeTripId, savedPlaces, showRoutePanel, trips]);
+  const tripPlaceIds = useMemo(() => tripPlaces.map(p => p.id).join(','), [tripPlaces]);
 
   // 获取分段路线详情（独立计算每一段的出行方式）
   useEffect(() => {
@@ -594,14 +597,14 @@ export default function App() {
                        const speed = currentMode === 'walking' ? 1.2 : currentMode === 'riding' ? 4 : 10;
                        resolve({ distance: dist, time: dist / speed });
                     }
-                  } catch(e) {
+                  } catch {
                     resolve({ distance: 0, time: 0 });
                   }
                });
              } else {
                resolve({ distance: 0, time: 0 });
              }
-           } catch (e) {
+           } catch {
              resolve({ distance: 0, time: 0 });
            }
          });
@@ -614,7 +617,7 @@ export default function App() {
     };
     fetchSegments();
     return () => { canceled = true; };
-  }, [tripPlaces.map(p=>p.id).join(','), segmentModes, currentCity, mapStatus, showRoutePanel]);
+  }, [tripPlaceIds, tripPlaces, segmentModes, currentCity, mapStatus, showRoutePanel]);
 
   const handleSegmentModeChange = (index, newMode) => {
     setSegmentModes(prev => {
@@ -649,7 +652,7 @@ export default function App() {
     });
 
     if (user && !user.is_anonymous && supabase) {
-      try { await supabase.from('places').upsert({ ...newPlace, user_id: user.id }); } catch(e){}
+      try { await supabase.from('places').upsert({ ...newPlace, user_id: user.id }); } catch(e){ logCloudError('Save place', e); }
     }
     
     if (!stayOpen) {
@@ -661,21 +664,21 @@ export default function App() {
   const removePlace = async (id) => {
     setSavedPlaces(prev => prev.filter(p => p.id !== id));
     if (user && !user.is_anonymous && supabase) {
-      try { await supabase.from('places').delete().eq('id', id); } catch(e){}
+      try { await supabase.from('places').delete().eq('id', id); } catch(e){ logCloudError('Remove place', e); }
     }
   };
 
   const createTrip = async (newTrip) => {
     setTrips(prev => [newTrip, ...prev]);
     if (user && !user.is_anonymous && supabase) {
-      try { await supabase.from('trips').upsert({ ...newTrip, user_id: user.id }); } catch(e){}
+      try { await supabase.from('trips').upsert({ ...newTrip, user_id: user.id }); } catch(e){ logCloudError('Create trip', e); }
     }
   };
 
   const removeTrip = async (id) => {
     setTrips(prev => prev.filter(t => t.id !== id));
     if (user && !user.is_anonymous && supabase) {
-      try { await supabase.from('trips').delete().eq('id', id); } catch(e){}
+      try { await supabase.from('trips').delete().eq('id', id); } catch(e){ logCloudError('Remove trip', e); }
     }
   };
 
@@ -692,7 +695,7 @@ export default function App() {
     }
     setTrips(prev => prev.map(t => t.id === editingTripId ? { ...t, name: editingTripName.trim() } : t));
     if (user && !user.is_anonymous && supabase) {
-      try { await supabase.from('trips').update({ name: editingTripName.trim() }).eq('id', editingTripId); } catch(e){}
+      try { await supabase.from('trips').update({ name: editingTripName.trim() }).eq('id', editingTripId); } catch(e){ logCloudError('Rename trip', e); }
     }
     setEditingTripId(null);
     setEditingTripName('');
@@ -715,7 +718,7 @@ export default function App() {
     }));
 
     if (user && !user.is_anonymous && supabase && updatedPlaces.length > 0) {
-      try { await supabase.from('trips').update({ places: updatedPlaces }).eq('id', activeTripId); } catch(e){}
+      try { await supabase.from('trips').update({ places: updatedPlaces }).eq('id', activeTripId); } catch(e){ logCloudError('Reorder trip places', e); }
     }
   };
 
@@ -726,7 +729,7 @@ export default function App() {
       setNewMemoText('');
       
       if (user && !user.is_anonymous && supabase) {
-        try { await supabase.from('memos').upsert({ ...newMemo, user_id: user.id }); } catch(e){}
+        try { await supabase.from('memos').upsert({ ...newMemo, user_id: user.id }); } catch(e){ logCloudError('Add memo', e); }
       }
     }
   };
@@ -734,14 +737,14 @@ export default function App() {
   const toggleMemo = async (id, currentDone) => {
     setGlobalMemos(prev => prev.map(m => m.id === id ? { ...m, done: !currentDone } : m));
     if (user && !user.is_anonymous && supabase) {
-      try { await supabase.from('memos').update({ done: !currentDone }).eq('id', id); } catch(e){}
+      try { await supabase.from('memos').update({ done: !currentDone }).eq('id', id); } catch(e){ logCloudError('Toggle memo', e); }
     }
   };
 
   const handleDeleteMemo = async (id) => {
     setGlobalMemos(prev => prev.filter(m => m.id !== id));
     if (user && !user.is_anonymous && supabase) {
-      try { await supabase.from('memos').delete().eq('id', id); } catch(e){}
+      try { await supabase.from('memos').delete().eq('id', id); } catch(e){ logCloudError('Delete memo', e); }
     }
   };
 
@@ -759,7 +762,7 @@ export default function App() {
 
     if (user && !user.is_anonymous && supabase) {
       const cloudMemos = newMemos.map(m => ({ ...m, user_id: user.id }));
-      try { await supabase.from('memos').insert(cloudMemos); } catch(e){}
+      try { await supabase.from('memos').insert(cloudMemos); } catch(e){ logCloudError('Add memo template items', e); }
     }
   };
 
@@ -770,7 +773,7 @@ export default function App() {
     setGlobalMemos(prev => prev.filter(m => !m.done));
 
     if (user && !user.is_anonymous && supabase) {
-      try { await supabase.from('memos').delete().in('id', idsToDelete); } catch(e){}
+      try { await supabase.from('memos').delete().in('id', idsToDelete); } catch(e){ logCloudError('Clear completed memos', e); }
     }
   };
 
@@ -786,7 +789,7 @@ export default function App() {
     }
     setGlobalMemos(prev => prev.map(m => m.id === editingMemoId ? { ...m, text: editingMemoText.trim() } : m));
     if (user && !user.is_anonymous && supabase) {
-      try { await supabase.from('memos').update({ text: editingMemoText.trim() }).eq('id', editingMemoId); } catch(e){}
+      try { await supabase.from('memos').update({ text: editingMemoText.trim() }).eq('id', editingMemoId); } catch(e){ logCloudError('Edit memo', e); }
     }
     setEditingMemoId(null);
     setEditingMemoText('');
