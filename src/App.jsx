@@ -1474,25 +1474,6 @@ export default function App() {
     }, { rows: [], cursor: initialMinute });
     return result.rows;
   })();
-  useEffect(() => {
-    const placeCount = tripPlaces.length;
-    const nextDays = Math.max(1, Number(Math.ceil(placeCount / 4)) || 1);
-    setRouteDayCount(nextDays);
-    setCurrentRouteDay((prev) => Math.min(Math.max(1, prev), nextDays));
-    if (!placeCount) return;
-    setStayMinutesByPlace((prev) => {
-      const next = { ...prev };
-      let changed = false;
-      tripPlaces.forEach((place, index) => {
-        const key = `day_${place.id}`;
-        if (!Number(next[key])) {
-          next[key] = Math.min(nextDays, Math.floor(index / Math.max(1, Math.ceil(placeCount / nextDays))) + 1);
-          changed = true;
-        }
-      });
-      return changed ? next : prev;
-    });
-  }, [activeTripId, tripPlaces]);
   const totalDays = routeDayCount;
   const dayOptions = Array.from({ length: totalDays }, (_, idx) => idx + 1);
   const currentDayRows = timelineRows.filter((row) => Number(stayMinutesByPlace[`day_${row.place.id}`] || 1) === currentRouteDay);
