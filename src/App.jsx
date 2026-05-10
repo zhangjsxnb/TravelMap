@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, memo } from 'react';
 import { 
   Map as MapIcon, List, User, Search, MapPin, Plus, Heart, 
   Navigation, CheckCircle2, Circle, 
@@ -167,7 +167,7 @@ const safeMergeAddress = (district, address) => {
 // ==========================================
 // 地图核心组件
 // ==========================================
-const RealMap = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, currentCity, onMarkerClick, routeModes = [], lockViewport = true, mapView, onMapViewChange }) => {
+const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, currentCity, onMarkerClick, routeModes = [], lockViewport = true, mapView, onMapViewChange }) => {
   const containerRef = useRef(null);
   const mapInstance = useRef(null);
   const prevCityRef = useRef('');
@@ -253,7 +253,7 @@ const RealMap = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, current
         console.error("Map rendering error:", err);
       }
     }
-  }, [places, isRoute, mapStatus, currentCity, onMarkerClick, routeModes, lockViewport, mapView, onMapViewChange]);
+  }, [places, isRoute, mapStatus, currentCity, onMarkerClick, lockViewport, mapView, onMapViewChange]);
 
   if (mapStatus === 'loading') return <div className="w-full aspect-square bg-blue-50 rounded-3xl flex items-center justify-center text-blue-300 shadow-inner mb-6"><Loader2 className="animate-spin" /></div>;
   if (mapStatus === 'no-key') return <div className="w-full aspect-square bg-gray-50 border-2 border-dashed border-gray-200 rounded-3xl flex flex-col items-center justify-center p-6 text-center shadow-inner mb-6"><MapIcon size={32} className="text-gray-300 mb-3" /><p className="text-sm font-bold text-gray-500 mb-1">尚未配置完整的地图 API</p></div>;
@@ -265,6 +265,7 @@ const RealMap = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, current
     </div>
   );
 };
+const RealMap = memo(RealMapBase);
 
 // ==========================================
 // 主应用逻辑
@@ -355,6 +356,8 @@ export default function App() {
   const [segmentRoutes, setSegmentRoutes] = useState([]); 
   const [isCalculatingSegments, setIsCalculatingSegments] = useState(false);
   const [stayMinutesByPlace, setStayMinutesByPlace] = useState({});
+  const [currentRouteDay, setCurrentRouteDay] = useState(1);
+  const [routeDayCount, setRouteDayCount] = useState(1);
   const [lockMapViewport, setLockMapViewport] = useState(true);
   const [mapView, setMapView] = useState(() => {
     try {
@@ -1471,6 +1474,28 @@ export default function App() {
     }, { rows: [], cursor: initialMinute });
     return result.rows;
   })();
+  useEffect(() => {
+    const placeCount = tripPlaces.length;
+    const nextDays = Math.max(1, Number(Math.ceil(placeCount / 4)) || 1);
+    setRouteDayCount(nextDays);
+    setCurrentRouteDay((prev) => Math.min(Math.max(1, prev), nextDays));
+    if (!placeCount) return;
+    setStayMinutesByPlace((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      tripPlaces.forEach((place, index) => {
+        const key = `day_${place.id}`;
+        if (!Number(next[key])) {
+          next[key] = Math.min(nextDays, Math.floor(index / Math.max(1, Math.ceil(placeCount / nextDays))) + 1);
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [activeTripId, tripPlaces]);
+  const totalDays = routeDayCount;
+  const dayOptions = Array.from({ length: totalDays }, (_, idx) => idx + 1);
+  const currentDayRows = timelineRows.filter((row) => Number(stayMinutesByPlace[`day_${row.place.id}`] || 1) === currentRouteDay);
 
   return (
     <div className="min-h-[100dvh] w-full flex justify-center bg-gray-100 sm:bg-[#f0f4f8]">
@@ -1930,10 +1955,7 @@ export default function App() {
                     <p className="text-sm font-bold text-slate-700 mb-2">提案预览</p>
                     <p className="text-xs text-slate-500 mb-3">{aiProposal.summary || '已生成可执行行程提案。'}</p>
                     <div className="mb-3 flex items-center justify-between">
-                      <p className="text-xs font-bold text-slate-600">多天同屏编辑</p>
-                      <div className="flex items-center gap-2">
-                        <button onClick={addDraftDay} className="text-[10px] px-2 py-1 rounded bg-blue-50 text-blue-600 border border-blue-100">+ 增加天数</button>
-                      </div>
+                      <p className="text-xs font-bold text-slate-600">按天编辑（单日视图）</p>
                     </div>
                     <div className="mb-3 overflow-x-auto hide-scrollbar">
                       <div className="flex gap-3 min-w-max pb-1">
@@ -1941,27 +1963,7 @@ export default function App() {
                           <div key={trip.id} className="w-[260px] bg-[#f9f7f2] rounded-xl border border-[#e9e7e3] p-3">
                             <div className="flex items-center justify-between mb-2">
                               <p className="text-xs font-bold text-slate-700">{`Day ${tripIndex + 1}`}</p>
-                              <div className="flex items-center gap-1">
-                                <button
-                                  onClick={() => {
-                                    if (tripIndex === 0) return;
-                                    setAiDraftTrips((prev) => {
-                                      const next = [...prev];
-                                      [next[tripIndex - 1], next[tripIndex]] = [next[tripIndex], next[tripIndex - 1]];
-                                      return next;
-                                    });
-                                  }}
-                                  className="text-[10px] px-2 py-1 rounded bg-white border border-[#ced6df]"
-                                >
-                                  ←
-                                </button>
-                                <button
-                                  onClick={() => removeDraftDay(tripIndex)}
-                                  className="text-[10px] px-2 py-1 rounded bg-red-50 text-red-500 border border-red-100"
-                                >
-                                  删天
-                                </button>
-                              </div>
+                              <div className="flex items-center gap-1"></div>
                             </div>
                             <div className="mb-2">
                               <label className="text-[10px] text-slate-500">默认交通</label>
@@ -2000,18 +2002,7 @@ export default function App() {
                                       />
                                       <span className="text-[10px] text-slate-500">分钟</span>
                                     </div>
-                                    <div className="mt-1.5 flex items-center gap-1 flex-wrap">
-                                      {aiDraftTrips.map((_, targetDayIndex) => (
-                                        <button
-                                          key={`move_${trip.id}_${pid}_${targetDayIndex}`}
-                                          onClick={() => moveDraftPlace(tripIndex, placeIndex, targetDayIndex)}
-                                          className={`text-[10px] px-1.5 py-0.5 rounded border ${targetDayIndex === tripIndex ? 'bg-gray-100 text-slate-400 border-gray-100' : 'bg-blue-50 text-blue-600 border-blue-100'}`}
-                                          disabled={targetDayIndex === tripIndex}
-                                        >
-                                          到D{targetDayIndex + 1}
-                                        </button>
-                                      ))}
-                                    </div>
+                                    <div className="mt-1.5 text-[10px] text-slate-400">单日编辑模式</div>
                                   </div>
                                 );
                               })}
@@ -2157,11 +2148,63 @@ export default function App() {
                           />
                         </div>
                       </div>
-                      <div className="space-y-2 max-h-40 overflow-y-auto">
-                        {timelineRows.map((row) => (
+                      <div className="mb-3 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] text-slate-500">天数</span>
+                          <select
+                            value={routeDayCount}
+                            onChange={(event) => {
+                              const nextDays = Math.max(1, Number(event.target.value) || 1);
+                              setRouteDayCount(nextDays);
+                              setCurrentRouteDay((prev) => Math.min(prev, nextDays));
+                              const placesPerDay = Math.max(1, Math.ceil((timelineRows.length || 1) / nextDays));
+                              setStayMinutesByPlace((prev) => {
+                                const next = { ...prev };
+                                timelineRows.forEach((row, index) => {
+                                  next[`day_${row.place.id}`] = Math.min(nextDays, Math.floor(index / placesPerDay) + 1);
+                                });
+                                return next;
+                              });
+                            }}
+                            className="text-[11px] px-2 py-1 rounded bg-white border border-[#e9e7e3]"
+                          >
+                            {[1,2,3,4,5,6,7].map((d) => <option key={`day_count_${d}`} value={d}>{d}天</option>)}
+                          </select>
+                        </div>
+                        <button onClick={() => setCurrentRouteDay((d) => Math.max(1, d - 1))} className="text-xs px-2 py-1 rounded bg-white border border-[#e9e7e3]">◀ DAY</button>
+                        <p className="text-sm font-bold text-slate-700">DAY {currentRouteDay}</p>
+                        <button onClick={() => setCurrentRouteDay((d) => Math.min(totalDays, d + 1))} className="text-xs px-2 py-1 rounded bg-white border border-[#e9e7e3]">DAY ▶</button>
+                      </div>
+                      <div className="space-y-2 max-h-56 overflow-y-auto">
+                        {currentDayRows.map((row) => (
                           <div key={`timeline_${row.id}`} className="flex items-center justify-between text-xs bg-[#f9f7f2] rounded-xl px-3 py-2">
                             <div className="min-w-0 pr-2">
-                              <p className="font-bold text-slate-700 truncate">{safeStr(row.place.name)}</p>
+                              <div className="font-bold text-slate-700 truncate flex items-center gap-1">
+                                <span>{safeStr(row.place.name)}</span>
+                                <select
+                                  value={Number(stayMinutesByPlace[`day_${row.place.id}`] || 1)}
+                                  onChange={(event) => {
+                                    const nextDay = Math.max(1, Math.min(totalDays, Number(event.target.value) || 1));
+                                    setStayMinutesByPlace((prev) => ({ ...prev, [`day_${row.place.id}`]: nextDay }));
+                                  }}
+                                  className="px-1 py-0.5 rounded bg-white border border-[#e9e7e3] text-[10px]"
+                                >
+                                  {dayOptions.map((d) => <option key={`d_${row.id}_${d}`} value={d}>DAY {d}</option>)}
+                                </select>
+                                <select
+                                  value={segmentModes[Math.max(0, timelineRows.findIndex((item) => item.id === row.id) - 1)] || 'driving'}
+                                  onChange={(event) => {
+                                    const idx = timelineRows.findIndex((item) => item.id === row.id) - 1;
+                                    if (idx >= 0) handleSegmentModeChange(idx, event.target.value);
+                                  }}
+                                  className="px-1 py-0.5 rounded bg-white border border-[#e9e7e3] text-[10px]"
+                                >
+                                  <option value="driving">驾车</option>
+                                  <option value="transit">公交</option>
+                                  <option value="riding">骑行</option>
+                                  <option value="walking">步行</option>
+                                </select>
+                              </div>
                               <div className="text-[10px] text-slate-500 mt-0.5 flex items-center gap-1">
                                 <span>停留</span>
                                 <input
