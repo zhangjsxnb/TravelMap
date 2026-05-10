@@ -1513,6 +1513,8 @@ export default function App() {
   const dayOptions = Array.from({ length: totalDays }, (_, idx) => idx + 1);
   const currentDayPlaceIds = activeTrip?.days?.[currentRouteDay - 1]?.places || [];
   const currentDayRows = timelineRows.filter((row) => currentDayPlaceIds.includes(row.place.id));
+  const currentDayTransitMinutes = currentDayRows.reduce((sum, row) => sum + (row.transitMinute || 0), 0);
+  const currentDayStayMinutes = currentDayRows.reduce((sum, row) => sum + (row.stayMinutes || 0), 0);
 
   return (
     <div className="min-h-[100dvh] w-full flex justify-center bg-gray-100 sm:bg-[#f0f4f8]">
@@ -2088,43 +2090,77 @@ export default function App() {
               <button onClick={() => setShowRoutePanel(false)} className="p-2 rounded-full bg-slate-100"><X size={20} /></button>
             </div>
             <div className="flex-1 overflow-hidden">
-              <div className="flex flex-col h-full border border-slate-200 rounded-xl overflow-hidden mx-4 my-4 bg-slate-50">
-                <div className="relative h-[28%] min-h-[168px] bg-slate-200 shrink-0">
+              <div className="flex flex-col h-full overflow-hidden mx-3 my-3 bg-slate-50 rounded-[28px]">
+                <div className="relative h-[26%] min-h-[154px] bg-slate-200 shrink-0 rounded-[24px] overflow-hidden border border-slate-200">
                   <RealMap places={tripPlaces} isRoute={true} mapStatus={mapStatus} currentCity={currentCity} lockViewport={lockMapViewport} mapView={routeMapView} onMapViewChange={setRouteMapView} routeModes={segmentModes} />
                 </div>
-                <div className="flex-1 flex flex-col relative bg-white rounded-t-[24px] -mt-1 z-20 shadow-[0_-10px_24px_rgba(0,0,0,0.05)] overflow-hidden">
-                  <div className="px-6 pt-6 pb-3 flex items-center justify-between shrink-0">
+                <div className="flex-1 flex flex-col relative bg-white rounded-[24px] mt-2 z-20 shadow-[0_8px_28px_rgba(0,0,0,0.06)] overflow-hidden border border-slate-100">
+                  <div className="px-5 pt-5 pb-3 shrink-0 border-b border-slate-100">
+                    <div className="flex items-center justify-between">
                     <button onClick={() => setCurrentRouteDay((d) => Math.max(1, d - 1))} className={`p-2 rounded-full ${currentRouteDay === 1 ? 'opacity-10 pointer-events-none' : 'text-slate-400 hover:bg-slate-100'}`}><ChevronLeft size={24} /></button>
                     <div className="text-center">
-                      <span className="block text-[10px] font-black tracking-[0.3em] mb-1 uppercase" style={{ color: COLORS.primary }}>Route Planner</span>
-                      <h2 className="font-black text-xl text-slate-800">{safeStr(activeTrip?.name) || `Day ${currentRouteDay}`}</h2>
-                      <p className="text-[11px] text-slate-400 mt-1">Day {currentRouteDay} / {totalDays}</p>
+                      <span className="block text-[10px] font-black tracking-[0.25em] mb-1 uppercase" style={{ color: COLORS.primary }}>Itinerary</span>
+                      <h2 className="font-black text-lg text-slate-800 max-w-[180px] truncate">{safeStr(activeTrip?.name) || `Day ${currentRouteDay}`}</h2>
+                      <p className="text-[11px] text-slate-400 mt-1">第 {currentRouteDay} 天 / 共 {totalDays} 天</p>
                     </div>
                     <button onClick={() => setCurrentRouteDay((d) => Math.min(totalDays, d + 1))} className={`p-2 rounded-full ${currentRouteDay === totalDays ? 'opacity-10 pointer-events-none' : 'text-slate-400 hover:bg-slate-100'}`}><ChevronRight size={24} /></button>
+                    </div>
+                    <div className="mt-3 flex items-center gap-2 overflow-x-auto hide-scrollbar">
+                      {dayOptions.map((d) => (
+                        <button
+                          key={`day_chip_${d}`}
+                          onClick={() => setCurrentRouteDay(d)}
+                          className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap border transition-colors ${currentRouteDay === d ? 'text-white border-transparent' : 'text-slate-500 bg-slate-50 border-slate-200'}`}
+                          style={currentRouteDay === d ? { backgroundColor: COLORS.primary } : {}}
+                        >
+                          DAY {d}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="mt-3 grid grid-cols-3 gap-2">
+                      <div className="rounded-2xl bg-slate-50 px-3 py-2 text-center">
+                        <div className="text-[10px] font-bold text-slate-400">地点</div>
+                        <div className="text-sm font-black text-slate-700">{currentDayRows.length}</div>
+                      </div>
+                      <div className="rounded-2xl bg-slate-50 px-3 py-2 text-center">
+                        <div className="text-[10px] font-bold text-slate-400">停留</div>
+                        <div className="text-sm font-black text-slate-700">{currentDayStayMinutes} 分</div>
+                      </div>
+                      <div className="rounded-2xl bg-slate-50 px-3 py-2 text-center">
+                        <div className="text-[10px] font-bold text-slate-400">路程</div>
+                        <div className="text-sm font-black text-slate-700">{currentDayTransitMinutes} 分</div>
+                      </div>
+                    </div>
                   </div>
-                  <main className="flex-1 overflow-y-auto px-5 pt-2 pb-24 hide-scrollbar">
-                    <div className="space-y-5">
+                  <main className="flex-1 overflow-y-auto px-4 pt-3 pb-20 hide-scrollbar">
+                    <div className="space-y-3">
+                      {currentDayRows.length === 0 ? (
+                        <div className="rounded-[24px] border border-dashed border-slate-200 bg-slate-50 px-5 py-10 text-center">
+                          <p className="text-sm font-bold text-slate-600">这一天还没有地点</p>
+                          <p className="text-xs text-slate-400 mt-2">先在行程里把地点分配到这一天</p>
+                        </div>
+                      ) : null}
                       {currentDayRows.map((row) => {
                         const rowIndex = timelineRows.findIndex((item) => item.id === row.id);
                         const segMode = segmentModes[Math.max(0, rowIndex - 1)] || 'driving';
                         const transitMinute = row.transitMinute || 0;
                         const modeLabel = segMode === 'transit' ? '公交' : segMode === 'riding' ? '骑行' : segMode === 'walking' ? '步行' : '驾车';
                         return (
-                          <div key={`timeline_${row.id}`} className="group bg-white rounded-[28px] p-5 border border-slate-100 shadow-sm hover:shadow-lg transition-all relative">
+                          <div key={`timeline_${row.id}`} className="group bg-white rounded-[24px] p-4 border border-slate-100 shadow-sm transition-all relative">
                             <div className="flex justify-between items-start gap-3">
-                              <div className="flex gap-4 min-w-0">
-                                <div className="w-8 h-12 rounded-[16px] shrink-0 text-white flex items-start justify-center pt-2.5" style={{ backgroundColor: COLORS.primary }}><MapPin size={12} /></div>
+                              <div className="flex gap-3 min-w-0">
+                                <div className="w-7 h-10 rounded-[14px] shrink-0 text-white flex items-start justify-center pt-2" style={{ backgroundColor: COLORS.primary }}><MapPin size={11} /></div>
                                 <div className="flex flex-col gap-1 min-w-0">
-                                  <h3 className="font-bold text-slate-800 text-sm truncate">{safeStr(row.place.name)}</h3>
+                                  <h3 className="font-bold text-slate-800 text-[13px] truncate">{safeStr(row.place.name)}</h3>
                                   <div className="text-[9px] text-slate-400 truncate">{normalizeAddressText(row.place)}</div>
-                                  <div className="flex items-center flex-wrap gap-2 text-slate-400 mt-1">
-                                    <div className="flex items-center gap-1">
+                                  <div className="flex items-center flex-wrap gap-1.5 text-slate-400 mt-1">
+                                    <div className="flex items-center gap-1 rounded-full bg-slate-50 border border-slate-100 px-2 py-1">
                                       <Clock size={14} />
-                                      <span className="text-[11px]">鍋滅暀</span>
-                                      <input type="number" min={15} step={5} value={Number(stayMinutesByPlace[row.place.id]) || row.stayMinutes} onChange={(event) => setStayMinutesByPlace((prev) => ({ ...prev, [row.place.id]: Math.max(15, Number(event.target.value) || 15) }))} className="w-16 bg-slate-50 text-slate-700 font-bold outline-none text-[11px] px-1 rounded border border-slate-200" />
-                                      <span className="text-[11px]">鍒嗛挓</span>
+                                      <span className="text-[10px]">停留</span>
+                                      <input type="number" min={15} step={5} value={Number(stayMinutesByPlace[row.place.id]) || row.stayMinutes} onChange={(event) => setStayMinutesByPlace((prev) => ({ ...prev, [row.place.id]: Math.max(15, Number(event.target.value) || 15) }))} className="w-12 bg-white text-slate-700 font-bold outline-none text-[10px] px-1 rounded border border-slate-200" />
+                                      <span className="text-[10px]">分</span>
                                     </div>
-                                    {rowIndex > 0 ? <div className="text-[11px] px-2 py-0.5 rounded-full bg-slate-50 border border-slate-100 text-slate-500">{modeLabel} · {transitMinute} 分钟</div> : null}
+                                    {rowIndex > 0 ? <div className="text-[10px] px-2 py-1 rounded-full bg-slate-50 border border-slate-100 text-slate-500">{modeLabel} · {transitMinute} 分</div> : null}
                                   </div>
                                 </div>
                               </div>
@@ -2143,20 +2179,20 @@ export default function App() {
                             <div className="flex items-center justify-between mt-5 pt-4 border-t border-dashed border-slate-100">
                               <div className="flex flex-col"><span className="text-[9px] text-slate-400 font-black uppercase">Arrival</span><span className="text-sm font-black text-slate-700">{row.arriveAt}</span></div>
                               <div className="flex-1 mx-6 h-1 bg-slate-50 rounded-full relative"><div className="absolute top-0 left-0 h-full w-1/3 rounded-full" style={{ backgroundColor: COLORS.light }}></div></div>
-                              <div className="flex flex-col text-right"><span className="text-[9px] text-slate-400 font-black uppercase">Departure</span><span className="text-sm font-black text-slate-700">{row.leaveAt}</span></div>
+                              <div className="flex flex-col text-right"><span className="text-[9px] text-slate-400 font-black uppercase">Leave</span><span className="text-sm font-black text-slate-700">{row.leaveAt}</span></div>
                             </div>
                           </div>
                         );
                       })}
                     </div>
                   </main>
-                  <div className="px-6 py-6 bg-white/80 backdrop-blur-md border-t border-slate-50 text-center shrink-0">
+                  <div className="px-6 py-4 bg-white/90 backdrop-blur-md border-t border-slate-50 text-center shrink-0">
                     <div className="flex justify-center gap-2.5 mb-2">
                       {dayOptions.map((d) => (
                         <div key={`page_${d}`} onClick={() => setCurrentRouteDay(d)} className={`h-1.5 rounded-full transition-all duration-500 cursor-pointer ${currentRouteDay === d ? 'w-10 shadow-lg' : 'w-1.5 bg-slate-200'}`} style={currentRouteDay === d ? { backgroundColor: COLORS.primary } : {}} />
                       ))}
                     </div>
-                    <p className="text-[10px] text-slate-300 font-black uppercase tracking-[0.3em]">Tap dots or arrows</p>
+                    <p className="text-[10px] text-slate-300 font-black uppercase tracking-[0.2em]">Use arrows or day tabs</p>
                   </div>
                 </div>
               </div>
