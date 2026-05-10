@@ -4,11 +4,12 @@
   "Use provided places for routes.",
   "Do not invent placeIds outside the input places list.",
   "Keep routes practical and concise.",
+  "When the user wants multiple days, keep everything inside one itinerary and split by day groups.",
 ].join(" ");
 
 const MAX_REQUEST_BYTES = 50 * 1024;
-const MAX_PROMPT_LENGTH = 1000;
-const MAX_PLACES = 100;
+const MAX_PROMPT_LENGTH = 600;
+const MAX_PLACES = 60;
 const RATE_WINDOW_MS = 60 * 1000;
 const RATE_MAX_REQUESTS = 20;
 const memoryRateLimit = new Map();
@@ -166,7 +167,7 @@ export default async function handler(req, res) {
 
   const apiKey = process.env.ALIYUN_API_KEY || "";
   const baseUrl = process.env.ALIYUN_BASE_URL || "https://dashscope.aliyuncs.com/compatible-mode/v1";
-  const model = process.env.ALIYUN_MODEL || "qwen3.6-plus-2026-04-02";
+  const model = process.env.ALIYUN_MODEL || "qwen3-vl-235b-a22b-thinking";
 
   if (!apiKey) {
     res.status(500).json({ error: "Missing ALIYUN_API_KEY" });
@@ -210,6 +211,7 @@ export default async function handler(req, res) {
           { role: "user", content: userPrompt },
         ],
         temperature: 0.2,
+        max_tokens: 600,
       }),
     });
 

@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useMemo, useRef, memo } from 'react';
+import { useState, useEffect, useMemo, useRef, memo } from 'react';
 import { 
   Map as MapIcon, List, User, Search, MapPin, Plus, Heart, 
   Navigation, CheckCircle2, Circle, Clock,
   X, Sparkles, Trash2, ClipboardList,
   Mail, KeyRound, Loader2, LogOut, AlertCircle, ChevronDown, ChevronLeft, ChevronRight, LocateFixed,
-  Star, ChevronUp, Car, Bus, Footprints, Bike, Settings, Edit2, CornerDownLeft
+  Star, Settings, Edit2, CornerDownLeft
 } from 'lucide-react';
 
 // ==========================================
@@ -165,7 +165,7 @@ const safeMergeAddress = (district, address) => {
 // ==========================================
 // 地图核心组件
 // ==========================================
-const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, currentCity, onMarkerClick, routeModes = [], lockViewport = true, mapView, onMapViewChange }) => {
+const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, currentCity, onMarkerClick, lockViewport = true, mapView, onMapViewChange }) => {
   const containerRef = useRef(null);
   const mapInstance = useRef(null);
   const prevCityRef = useRef('');
@@ -210,7 +210,12 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
         
         const map = mapInstance.current;
         
-        if (prevCityRef.current !== currentCity) prevCityRef.current = currentCity;
+        if (prevCityRef.current !== currentCity) {
+          prevCityRef.current = currentCity;
+          if (!mapView?.center) {
+            map.setZoom(11);
+          }
+        }
 
         map.clearMap();
         if (mapView?.center && typeof mapView?.zoom === 'number') {
@@ -244,7 +249,7 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
             });
             map.add(polyline);
           }
-        } else if (places.length > 0 && !isRoute && !lockViewport && !mapView?.center) {
+        } else if (places.length > 0 && (!lockViewport || isRoute || !mapView?.center)) {
           map.setFitView();
         }
       } catch (err) {
@@ -336,7 +341,7 @@ export default function App() {
   const [aiConversation, setAiConversation] = useState([]);
   const [aiProposal, setAiProposal] = useState(null);
   const [aiDraftStayMinutesByPlace, setAiDraftStayMinutesByPlace] = useState({});
-  const [dayStartAt, setDayStartAt] = useState(localStorage.getItem('travel_day_start_at') || '10:00');
+  const [dayStartAt] = useState(localStorage.getItem('travel_day_start_at') || '10:00');
 
   const [favSearchQuery, setFavSearchQuery] = useState('');
   const [routeBuilderStart, setRouteBuilderStart] = useState(null);
@@ -350,11 +355,11 @@ export default function App() {
   // 分段交通方式配置
   const [segmentModes, setSegmentModes] = useState([]); 
   const [segmentRoutes, setSegmentRoutes] = useState([]); 
-  const [isCalculatingSegments, setIsCalculatingSegments] = useState(false);
+  const [, setIsCalculatingSegments] = useState(false);
   const [stayMinutesByPlace, setStayMinutesByPlace] = useState({});
   const [currentRouteDay, setCurrentRouteDay] = useState(1);
-  const [routeDayCount, setRouteDayCount] = useState(1);
-  const [lockMapViewport, setLockMapViewport] = useState(true);
+  const [routeDayCount] = useState(1);
+  const [lockMapViewport] = useState(true);
   const [mapView, setMapView] = useState(() => {
     try {
       const local = JSON.parse(localStorage.getItem('travel_map_view') || '{}');
@@ -881,6 +886,7 @@ export default function App() {
   }, [tripPlaceIds, tripPlaces, segmentModes, currentCity, mapStatus, showRoutePanel]);
 
   const handleSegmentModeChange = (index, newMode) => {
+    routeCacheRef.current.clear();
     setSegmentModes(prev => {
       const next = [...prev];
       next[index] = newMode;
@@ -892,6 +898,7 @@ export default function App() {
     const newModes = new Array(Math.max(0, tripPlaces.length - 1)).fill(mode);
     setSegmentModes(newModes);
   };
+  void setAllSegmentModes;
 
   // ==========================================
   // 云端同步写操作逻辑
@@ -1220,9 +1227,14 @@ export default function App() {
   const selectCity = (city) => {
     setCurrentCity(city);
     localStorage.setItem('lastCity', city); 
+    setMapView({ zoom: 11, center: null });
+    setRouteMapView({ zoom: 11, center: null });
+    setSearchResults([]);
     setShowCityPicker(false);
     setCustomCityInput('');
   };
+  void removePlaceFromActiveTrip;
+  void movePlace;
 
   const getRecommendations = (place) => {
     if (!place || !window.AMap?.GeometryUtil) return [];
@@ -1263,6 +1275,7 @@ export default function App() {
       try { await supabase.from('trips').update({ places: updatedPlaces }).eq('id', activeTripId); } catch (e) { logCloudError('Add place to trip', e); }
     }
   };
+  void addPlaceToActiveTrip;
 
   const filteredFavs = savedPlaces.filter(p => 
     safeStr(p.name).toLowerCase().includes(favSearchQuery.toLowerCase()) ||
@@ -1355,6 +1368,8 @@ export default function App() {
 
   const totalDist = segmentRoutes.reduce((acc, curr) => acc + (curr?.distance || 0), 0);
   const totalTime = segmentRoutes.reduce((acc, curr) => acc + (curr?.time || 0), 0);
+  void totalDist;
+  void totalTime;
   const timelineRows = (() => {
     const initialMinute = toMinute(dayStartAt);
     const result = tripPlaces.reduce((accumulator, place, index) => {
@@ -1425,20 +1440,20 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="flex-1 overflow-y-auto px-6 pb-24 min-h-0 hide-scrollbar">
+              <div className="flex-1 overflow-y-auto px-6 pb-24 min-h-0 hide-scrollbar overflow-x-hidden">
                 {isSearching ? (
-                  <div className="space-y-3 animate-in fade-in slide-in-from-bottom-4">
+                  <div className="space-y-3 animate-in fade-in slide-in-from-bottom-4 min-h-[320px]">
                     {searchQuery.length === 0 ? (
                       <div className="text-center py-20 text-slate-400 text-sm flex flex-col items-center">
                         <MapIcon size={32} className="mb-2 text-slate-200" />
                         输入地点名称开始搜索
                       </div>
                     ) : searchResults.length > 0 ? (
-                      searchResults.map((p, index) => {
+                      searchResults.map((p) => {
                         const key = placeIdentityKey(p, currentCity);
                         const isSaved = savedPlaces.some((saved) => placeIdentityKey(saved, currentCity) === key);
                         return (
-                          <div key={`${safeStr(p.id)}_${index}`} onClick={() => setSelectedPlace(p)} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-50 flex justify-between items-center active:scale-95 transition-transform cursor-pointer">
+                          <div key={safeStr(p.id) || key} onClick={() => setSelectedPlace(p)} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-50 flex justify-between items-center active:scale-95 transition-transform cursor-pointer min-h-[84px]">
                             <div className="pr-4 overflow-hidden flex-1">
                               <h4 className="font-bold text-base text-slate-700 truncate">{safeStr(p.name)}</h4>
                               <p className="text-[11px] text-slate-400 mt-1.5 truncate flex items-center gap-1">
@@ -1490,7 +1505,7 @@ export default function App() {
 
           {/* ==================== 收藏夹页面 ==================== */}
           {activeTab === 'favorites' && (
-            <div className="h-full flex flex-col animate-in fade-in bg-[#f0f4f8] min-h-0">
+            <div className="h-full flex flex-col animate-in fade-in bg-[#f0f4f8] min-h-0 overflow-x-hidden">
                <div className="px-6 pt-5 pb-3 bg-white shadow-sm z-10 shrink-0">
                  <h2 className="text-2xl font-bold">我的收藏夹</h2>
                  <div className="relative mt-4">
@@ -1888,10 +1903,10 @@ export default function App() {
             </div>
             <div className="flex-1 overflow-hidden">
               <div className="flex flex-col h-full border border-slate-200 rounded-xl overflow-hidden mx-4 my-4 bg-slate-50">
-                <div className="relative h-[35%] min-h-[220px] bg-slate-200 shrink-0">
+                <div className="relative h-[32%] min-h-[190px] bg-slate-200 shrink-0">
                   <RealMap places={tripPlaces} isRoute={true} mapStatus={mapStatus} currentCity={currentCity} lockViewport={lockMapViewport} mapView={routeMapView} onMapViewChange={setRouteMapView} routeModes={segmentModes} />
                 </div>
-                <div className="flex-1 flex flex-col relative bg-white rounded-t-[32px] -mt-8 z-20 shadow-[0_-20px_50px_rgba(0,0,0,0.08)] overflow-hidden">
+                <div className="flex-1 flex flex-col relative bg-white rounded-t-[28px] -mt-3 z-20 shadow-[0_-14px_30px_rgba(0,0,0,0.06)] overflow-hidden">
                   <div className="px-8 pt-8 pb-4 flex items-center justify-between shrink-0">
                     <button onClick={() => setCurrentRouteDay((d) => Math.max(1, d - 1))} className={`p-2 rounded-full ${currentRouteDay === 1 ? 'opacity-10 pointer-events-none' : 'text-slate-400 hover:bg-slate-100'}`}><ChevronLeft size={24} /></button>
                     <div className="text-center">
@@ -1909,10 +1924,10 @@ export default function App() {
                           <div key={`timeline_${row.id}`} className="group bg-white rounded-[28px] p-5 border border-slate-100 shadow-sm hover:shadow-lg transition-all relative">
                             <div className="flex justify-between items-start gap-3">
                               <div className="flex gap-4 min-w-0">
-                                <div className="p-3 rounded-2xl shrink-0 text-white" style={{ backgroundColor: COLORS.primary }}><MapPin size={18} /></div>
+                                <div className="w-10 h-16 rounded-[18px] shrink-0 text-white flex items-start justify-center pt-3" style={{ backgroundColor: COLORS.primary }}><MapPin size={14} /></div>
                                 <div className="flex flex-col gap-1 min-w-0">
-                                  <h3 className="font-bold text-slate-800 text-lg truncate">{safeStr(row.place.name)}</h3>
-                                  <div className="text-[11px] text-slate-400 truncate">{normalizeAddressText(row.place)}</div>
+                                  <h3 className="font-bold text-slate-800 text-base truncate">{safeStr(row.place.name)}</h3>
+                                  <div className="text-[10px] text-slate-400 truncate">{normalizeAddressText(row.place)}</div>
                                   <div className="flex items-center flex-wrap gap-2 text-slate-400 mt-1">
                                     <div className="flex items-center gap-1">
                                       <Clock size={14} />
@@ -2105,7 +2120,7 @@ export default function App() {
         )}
 
       </div>
-      <style>{`.pb-safe{padding-bottom:env(safe-area-inset-bottom)}.pt-safe{padding-top:env(safe-area-inset-top)}.hide-scrollbar::-webkit-scrollbar{display:none}`}</style>
+      <style>{`.pb-safe{padding-bottom:env(safe-area-inset-bottom)}.pt-safe{padding-top:env(safe-area-inset-top)}.hide-scrollbar::-webkit-scrollbar{display:none}.amap-logo,.amap-copyright{display:none!important}`}</style>
     </div>
   );
 }
