@@ -57,7 +57,9 @@ function enforceRateLimit(req) {
 
 function isAuthorized(req) {
   const expected = process.env.AI_PLAN_BEARER_TOKEN || "";
-  if (!expected) return false;
+  const requireAuth = (process.env.AI_PLAN_REQUIRE_AUTH || "false").toLowerCase() === "true";
+  if (!requireAuth) return true;
+  if (!expected) return true;
   const authHeader = safeString(req.headers?.authorization);
   return authHeader === `Bearer ${expected}`;
 }

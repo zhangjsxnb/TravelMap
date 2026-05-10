@@ -157,6 +157,13 @@ const placeIdentityKey = (placeData, fallbackCity = '') => {
   return `${city}::${name}`;
 };
 
+const safeMergeAddress = (district, address) => {
+  const d = safeStr(district).trim();
+  const a = safeStr(address).trim();
+  if (d && a) return `${d} ${a}`;
+  return d || a || '';
+};
+
 // ==========================================
 // 地图核心组件
 // ==========================================
@@ -458,7 +465,7 @@ export default function App() {
              setMapErrorMsg('脚本加载成功但 AMap 对象不存在');
           }
         };
-        mapScript.src = `https://webapi.amap.com/maps?v=2.0&key=${AMAP_CONFIG.key}&plugin=AMap.AutoComplete,AMap.PlaceSearch,AMap.GeometryUtil,AMap.Driving,AMap.Walking,AMap.Riding,AMap.Transfer,AMap.Geolocation&callback=_amapInitCallback`;
+        mapScript.src = `https://webapi.amap.com/maps?v=2.0&key=${AMAP_CONFIG.key}&plugin=AMap.AutoComplete,AMap.PlaceSearch,AMap.InputTips,AMap.Geocoder,AMap.GeometryUtil,AMap.Driving,AMap.Walking,AMap.Riding,AMap.Transfer,AMap.Geolocation&callback=_amapInitCallback`;
         mapScript.async = true;
         mapScript.onerror = () => {
           setMapStatus('error');
@@ -502,55 +509,74 @@ export default function App() {
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      if (mapStatus === 'success' && searchQuery && window.AMap?.AutoComplete) {
-        const autoOptions = currentCity !== '全国' ? { city: currentCity, citylimit: true } : { city: '全国' };
-        
-        if (!autoComplete.current) {
-           autoComplete.current = new window.AMap.AutoComplete(autoOptions);
-        } else {
-           autoComplete.current.setCity(currentCity !== '全国' ? currentCity : '全国');
-           autoComplete.current.setCityLimit(currentCity !== '全国');
-        }
+      if (mapStatus === 'success' && searchQuery) {
+        const mergedResults = [];
+        const seen = new Set();
+        const append = (item) => {
+          if (!item) return;
+          const key = `${safeStr(item.name)}|${safeStr(item.address)}|${safeStr(item.location?.lng)}|${safeStr(item.location?.lat)}`;
+          if (seen.has(key)) return;
+          seen.add(key);
+          mergedResults.push(item);
+        };
+        const done = () => setSearchResults(mergedResults.slice(0, 50));
+        let pending = 0;
+        const finishOne = () => {
+          pending -= 1;
+          if (pending <= 0) done();
+        };
 
         try {
-          autoComplete.current.search(searchQuery, (status, result) => {
-            const tips = status === 'complete' && result?.tips ? result.tips.filter(item => item && (item.location || item.address || item.district)) : [];
-            if (!window.AMap?.PlaceSearch) {
-              setSearchResults(tips);
-              return;
-            }
-            try {
-              const placeSearch = new window.AMap.PlaceSearch({
-                city: currentCity === '全国' ? '全国' : currentCity,
-                citylimit: false,
-                pageSize: 20,
-                extensions: 'all',
-              });
-              placeSearch.search(searchQuery, (s2, r2) => {
-                const pois = s2 === 'complete' ? (r2?.poiList?.pois || []) : [];
-                const enriched = pois.map((poi) => ({
-                  id: safeStr(poi.id) || `${safeStr(poi.name)}_${safeStr(poi.location?.lng)}_${safeStr(poi.location?.lat)}`,
-                  name: safeStr(poi.name),
-                  address: safeStr(poi.address),
-                  district: `${safeStr(poi.pname)}${safeStr(poi.cityname)}${safeStr(poi.adname)}`,
-                  category: safeStr(poi.type),
-                  location: poi.location ? { lng: poi.location.lng, lat: poi.location.lat } : null,
-                  city: safeStr(poi.cityname),
-                }));
-                const merged = [...tips, ...enriched];
-                const seen = new Set();
-                const unique = merged.filter((item) => {
-                  const key = `${safeStr(item.name)}|${safeStr(item.address)}|${safeStr(item.location?.lng)}|${safeStr(item.location?.lat)}`;
-                  if (seen.has(key)) return false;
-                  seen.add(key);
-                  return true;
-                });
-                setSearchResults(unique.slice(0, 40));
-              });
-            } catch {
-              setSearchResults(tips);
-            }
-          });
+          if (window.AMap?.AutoComplete) {
+            pending += 1;
+            const autoOptions = currentCity !== '全国' ? { city: currentCity, citylimit: true } : { city: '全国' };
+            if (!autoComplete.current) autoComplete.current = new window.AMap.AutoComplete(autoOptions);
+            autoComplete.current.search(searchQuery, (status, result) => {
+              const tips = status === 'complete' && result?.tips ? result.tips : [];
+              tips.forEach((t) => append(t));
+              finishOne();
+            });
+          }
+
+          if (window.AMap?.InputTips) {
+            pending += 1;
+            const inputTips = new window.AMap.InputTips({
+              city: currentCity === '全国' ? '全国' : currentCity,
+              citylimit: false,
+            });
+            inputTips.search(searchQuery, (status, result) => {
+              const tips = status === 'complete' ? (result?.tips || []) : [];
+              tips.forEach((t) => append(t));
+              finishOne();
+            });
+          }
+
+          if (window.AMap?.PlaceSearch) {
+            pending += 1;
+            const placeSearch = new window.AMap.PlaceSearch({
+              city: currentCity === '全国' ? '全国' : currentCity,
+              citylimit: false,
+              pageSize: 30,
+              extensions: 'all',
+            });
+            placeSearch.search(searchQuery, (s2, r2) => {
+              const pois = s2 === 'complete' ? (r2?.poiList?.pois || []) : [];
+              pois.forEach((poi) => append({
+                id: safeStr(poi.id) || `${safeStr(poi.name)}_${safeStr(poi.location?.lng)}_${safeStr(poi.location?.lat)}`,
+                name: safeStr(poi.name),
+                address: safeStr(poi.address),
+                district: `${safeStr(poi.pname)}${safeStr(poi.cityname)}${safeStr(poi.adname)}`,
+                category: safeStr(poi.type),
+                location: poi.location ? { lng: poi.location.lng, lat: poi.location.lat } : null,
+                city: safeStr(poi.cityname),
+              }));
+              finishOne();
+            });
+          }
+
+          if (pending === 0) {
+            setSearchResults([]);
+          }
         } catch(e) {
           console.error('Search error', e);
           setSearchResults([]);
@@ -934,6 +960,7 @@ export default function App() {
   const handleSavePlace = async (placeData, stayOpen = false) => {
     const placeName = safeStr(placeData.name) || '未知地点';
     const inferredCity = inferCityName(placeData, currentCity);
+    const resolvedAddress = await resolveAddressForPlace(placeData);
     const dedupeKey = placeIdentityKey(placeData, currentCity);
     const existingByKey = savedPlaces.find((place) => placeIdentityKey(place, inferredCity) === dedupeKey);
     const newPlace = {
@@ -941,8 +968,8 @@ export default function App() {
       name: placeName,
       location: placeData.location,
       category: safeStr(placeData.category) || '景点',
-      address: normalizeAddressText(placeData),
-      district: safeStr(placeData.district) || safeStr(existingByKey?.district) || '',
+      address: safeStr(resolvedAddress.address) || normalizeAddressText(placeData),
+      district: safeStr(resolvedAddress.district) || safeStr(placeData.district) || safeStr(existingByKey?.district) || '',
       city: inferredCity,
       savedAt: Date.now()
     };
@@ -974,6 +1001,84 @@ export default function App() {
         }
       } catch(e) { logCloudError('Sync trip places after remove place', e); }
     }
+  };
+
+  const resolveAddressForPlace = async (placeData) => {
+    const location = getLngLat(placeData?.location);
+    const direct = safeMergeAddress(placeData?.district, placeData?.address);
+    if (direct && !/地图标记地点|地址待补全/.test(direct)) {
+      return {
+        address: normalizeAddressText(placeData),
+        district: safeStr(placeData?.district),
+      };
+    }
+    if (!window.AMap || !location) {
+      return { address: normalizeAddressText(placeData), district: safeStr(placeData?.district) };
+    }
+
+    // Try PlaceSearch around the clicked coordinate first.
+    if (window.AMap.PlaceSearch) {
+      try {
+        const resolved = await new Promise((resolve) => {
+          const ps = new window.AMap.PlaceSearch({
+            city: currentCity === '全国' ? '全国' : currentCity,
+            citylimit: false,
+            pageSize: 1,
+            extensions: 'all',
+          });
+          ps.searchNearBy(safeStr(placeData?.name) || '地点', location, 300, (status, result) => {
+            if (status !== 'complete' || !result?.poiList?.pois?.length) {
+              resolve(null);
+              return;
+            }
+            const poi = result.poiList.pois[0];
+            resolve({
+              district: `${safeStr(poi.pname)}${safeStr(poi.cityname)}${safeStr(poi.adname)}`,
+              address: safeStr(poi.address),
+            });
+          });
+        });
+        if (resolved) {
+          return {
+            district: resolved.district,
+            address: safeMergeAddress(resolved.district, resolved.address),
+          };
+        }
+      } catch (error) {
+        console.warn('PlaceSearch reverse lookup failed', error);
+      }
+    }
+
+    // Fallback to geocoder.
+    if (window.AMap.Geocoder) {
+      try {
+        const resolved = await new Promise((resolve) => {
+          const geocoder = new window.AMap.Geocoder({});
+          geocoder.getAddress(location, (status, result) => {
+            if (status !== 'complete' || !result?.regeocode) {
+              resolve(null);
+              return;
+            }
+            const comp = result.regeocode.addressComponent || {};
+            const district = `${safeStr(comp.province)}${safeStr(comp.city)}${safeStr(comp.district)}`;
+            resolve({
+              district,
+              address: safeStr(result.regeocode.formattedAddress),
+            });
+          });
+        });
+        if (resolved) {
+          return {
+            district: resolved.district,
+            address: safeMergeAddress(resolved.district, resolved.address),
+          };
+        }
+      } catch (error) {
+        console.warn('Geocoder reverse lookup failed', error);
+      }
+    }
+
+    return { address: normalizeAddressText(placeData), district: safeStr(placeData?.district) };
   };
 
   const createTrip = async (newTrip) => {
