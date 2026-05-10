@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, memo } from 'react';
+﻿import { useState, useEffect, useMemo, useRef, memo } from 'react';
 import { 
   Map as MapIcon, List, User, Search, MapPin, Plus, Heart, 
   Navigation, CheckCircle2, Circle, Clock,
@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 
 // ==========================================
-// 🌟 数据库建表 SQL (强烈建议在 Supabase SQL Editor 执行一次，确保字段完全一致不报错)
+// 馃専 鏁版嵁搴撳缓琛?SQL (寮虹儓寤鸿鍦?Supabase SQL Editor 鎵ц涓€娆★紝纭繚瀛楁瀹屽叏涓€鑷翠笉鎶ラ敊)
 // ==========================================
 /*
 drop table if exists public.places;
@@ -43,7 +43,7 @@ create table public.memos (
 */
 
 // ==========================================
-// 1. API 密钥配置区 
+// 1. API 瀵嗛挜閰嶇疆鍖?
 // ==========================================
 const AMAP_CONFIG = {
   key: import.meta.env.VITE_AMAP_KEY || '', 
@@ -70,7 +70,7 @@ const COLORS = {
   textLight: '#6E7C8A'
 };
 
-const HOT_CITIES = ['北京', '上海', '广州', '深圳', '成都', '重庆', '杭州', '西安', '武汉', '长春', '长沙', '南京'];
+const HOT_CITIES = ['鍖椾含', '涓婃捣', '骞垮窞', '娣卞湷', '鎴愰兘', '閲嶅簡', '鏉窞', '瑗垮畨', '姝︽眽', '闀挎槬', '闀挎矙', '鍗椾含'];
 
 const safeStr = (val) => {
   if (typeof val === 'string') return val;
@@ -96,14 +96,14 @@ const estimateStayMinutes = (place) => {
   const name = safeStr(place?.name);
   const category = safeStr(place?.category);
   const sourceText = `${name}${category}`;
-  if (/博物馆|美术馆|展览|古镇|公园|景区/.test(sourceText)) return 120;
-  if (/商场|步行街|夜市/.test(sourceText)) return 90;
-  if (/咖啡|茶|餐厅|火锅|烧烤|饭店/.test(sourceText)) return 75;
+  if (/鍗氱墿棣唡缇庢湳棣唡灞曡|鍙ら晣|鍏洯|鏅尯/.test(sourceText)) return 120;
+  if (/鍟嗗満|姝ヨ琛梶澶滃競/.test(sourceText)) return 90;
+  if (/鍜栧暋|鑼秥椁愬巺|鐏攨|鐑х儰|楗簵/.test(sourceText)) return 75;
   return 90;
 };
 
 const inferCityName = (placeData, fallbackCity) => {
-  const fromCity = safeStr(placeData?.city).replace('市', '').trim();
+  const fromCity = safeStr(placeData?.city).replace(/市$/, '').trim();
   if (fromCity) return fromCity;
   const district = safeStr(placeData?.district);
   const cityMatch = district.match(/([^省]+?)市/);
@@ -115,7 +115,7 @@ const logCloudError = (action, error) => {
   console.error(`${action} failed:`, error);
 };
 
-// 安全解析经纬度，防止未定义的数据格式导致 Script Error
+// 瀹夊叏瑙ｆ瀽缁忕含搴︼紝闃叉鏈畾涔夌殑鏁版嵁鏍煎紡瀵艰嚧 Script Error
 const getLngLat = (loc) => {
   if (!loc) return null;
   let lng, lat;
@@ -135,7 +135,7 @@ const getLngLat = (loc) => {
 const normalizeAddressText = (placeData) => {
   const address = safeStr(placeData?.address).trim();
   const district = safeStr(placeData?.district).trim();
-  const merged = address && address !== '地图标记地点' ? (district ? `${district} ${address}` : address) : district;
+  const merged = address && address !== '鍦板浘鏍囪鍦扮偣' ? (district ? `${district} ${address}` : address) : district;
   if (merged) {
     const deduped = merged
       .split(/\s+/)
@@ -162,8 +162,37 @@ const safeMergeAddress = (district, address) => {
   return d || a || '';
 };
 
+const flattenTripPlaceIds = (trip) => {
+  if (!trip) return [];
+  if (Array.isArray(trip.days) && trip.days.length > 0) {
+    return trip.days.flatMap((day) => Array.isArray(day?.places) ? day.places : []);
+  }
+  return Array.isArray(trip.places) ? trip.places : [];
+};
+
+const normalizeTrip = (trip) => {
+  if (!trip) return trip;
+  const flatPlaces = Array.from(new Set(flattenTripPlaceIds(trip)));
+  const safeDays = Array.isArray(trip.days) && trip.days.length > 0
+    ? trip.days.map((day, index) => ({
+        id: safeStr(day?.id) || `day_${index + 1}`,
+        title: safeStr(day?.title) || `Day ${index + 1}`,
+        places: Array.from(new Set(Array.isArray(day?.places) ? day.places : [])),
+      }))
+    : [{
+        id: 'day_1',
+        title: 'Day 1',
+        places: flatPlaces,
+      }];
+  return {
+    ...trip,
+    days: safeDays,
+    places: Array.from(new Set(safeDays.flatMap((day) => day.places))),
+  };
+};
+
 // ==========================================
-// 地图核心组件
+// 鍦板浘鏍稿績缁勪欢
 // ==========================================
 const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, currentCity, onMarkerClick, lockViewport = true, mapView, onMapViewChange }) => {
   const containerRef = useRef(null);
@@ -188,7 +217,7 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
                 name: e.name,
                 location: e.lnglat,
                 district: '',
-                address: '地图标记地点',
+                address: '鍦板浘鏍囪鍦扮偣',
               });
             }
           });
@@ -259,8 +288,8 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
   }, [places, isRoute, mapStatus, currentCity, onMarkerClick, lockViewport, mapView, onMapViewChange]);
 
   if (mapStatus === 'loading') return <div className="w-full aspect-square bg-blue-50 rounded-3xl flex items-center justify-center text-blue-300 shadow-inner mb-6"><Loader2 className="animate-spin" /></div>;
-  if (mapStatus === 'no-key') return <div className="w-full aspect-square bg-gray-50 border-2 border-dashed border-gray-200 rounded-3xl flex flex-col items-center justify-center p-6 text-center shadow-inner mb-6"><MapIcon size={32} className="text-gray-300 mb-3" /><p className="text-sm font-bold text-gray-500 mb-1">尚未配置完整的地图 API</p></div>;
-  if (mapStatus === 'error') return <div className="w-full aspect-square bg-red-50 border-2 border-dashed border-red-200 rounded-3xl flex flex-col items-center justify-center p-6 text-center shadow-inner mb-6"><AlertCircle size={32} className="text-red-300 mb-3" /><p className="text-sm font-bold text-red-500 mb-1">地图加载失败</p><p className="text-[10px] text-red-400">{mapErrorMsg}</p></div>;
+  if (mapStatus === 'no-key') return <div className="w-full aspect-square bg-gray-50 border-2 border-dashed border-gray-200 rounded-3xl flex flex-col items-center justify-center p-6 text-center shadow-inner mb-6"><MapIcon size={32} className="text-gray-300 mb-3" /><p className="text-sm font-bold text-gray-500 mb-1">灏氭湭閰嶇疆瀹屾暣鐨勫湴鍥?API</p></div>;
+  if (mapStatus === 'error') return <div className="w-full aspect-square bg-red-50 border-2 border-dashed border-red-200 rounded-3xl flex flex-col items-center justify-center p-6 text-center shadow-inner mb-6"><AlertCircle size={32} className="text-red-300 mb-3" /><p className="text-sm font-bold text-red-500 mb-1">鍦板浘鍔犺浇澶辫触</p><p className="text-[10px] text-red-400">{mapErrorMsg}</p></div>;
 
   return (
     <div className="w-full aspect-square min-h-[300px] rounded-3xl shadow-inner mb-6 overflow-hidden relative" style={{ backgroundColor: COLORS.light }}>
@@ -271,7 +300,7 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
 const RealMap = memo(RealMapBase);
 
 // ==========================================
-// 主应用逻辑
+// 涓诲簲鐢ㄩ€昏緫
 // ==========================================
 export default function App() {
   const [supabase, setSupabase] = useState(null);
@@ -297,28 +326,28 @@ export default function App() {
   const [trips, setTrips] = useState(() => {
     try {
       const local = localStorage.getItem('travel_trips');
-      return local ? JSON.parse(local) : [];
+      return local ? JSON.parse(local).map(normalizeTrip) : [];
     } catch { return []; }
   });
   
   const [globalMemos, setGlobalMemos] = useState(() => {
     try {
       const local = localStorage.getItem('travel_memos');
-      return local ? JSON.parse(local) : [{ id: '1', text: '身份证及重要证件', done: false }];
-    } catch { return [{ id: '1', text: '身份证及重要证件', done: false }]; }
+      return local ? JSON.parse(local) : [{ id: '1', text: '韬唤璇佸強閲嶈璇佷欢', done: false }];
+    } catch { return [{ id: '1', text: '韬唤璇佸強閲嶈璇佷欢', done: false }]; }
   });
   const [newMemoText, setNewMemoText] = useState('');
   
   const [memoTemplate, setMemoTemplate] = useState(() => {
     try {
       const local = localStorage.getItem('travel_memo_template');
-      return local ? JSON.parse(local) : ['身份证', '充电宝', '纸巾', '钥匙', '耳机'];
-    } catch { return ['身份证', '充电宝', '纸巾', '钥匙', '耳机']; }
+      return local ? JSON.parse(local) : ['身份证', '充电器', '纸巾', '钥匙', '耳机'];
+    } catch { return ['身份证', '充电器', '纸巾', '钥匙', '耳机']; }
   });
   const [showMemoTemplateModal, setShowMemoTemplateModal] = useState(false);
   const [newTemplateItem, setNewTemplateItem] = useState('');
 
-  const [currentCity, setCurrentCity] = useState(localStorage.getItem('lastCity') || '全国');
+  const [currentCity, setCurrentCity] = useState(localStorage.getItem('lastCity') || '鍏ㄥ浗');
   const [showCityPicker, setShowCityPicker] = useState(false);
   const [customCityInput, setCustomCityInput] = useState('');
   
@@ -327,14 +356,14 @@ export default function App() {
   const [searchResults, setSearchResults] = useState([]);
   const [selectedPlace, setSelectedPlace] = useState(null);
 
-  // 行程重命名状态
+  // 琛岀▼閲嶅懡鍚嶇姸鎬?
   const [editingTripId, setEditingTripId] = useState(null);
   const [editingTripName, setEditingTripName] = useState('');
 
   const [editingMemoId, setEditingMemoId] = useState(null);
   const [editingMemoText, setEditingMemoText] = useState('');
 
-  // AI 智能排期增强状态
+  // AI 鏅鸿兘鎺掓湡澧炲己鐘舵€?
   const [isSmartPlanning, setIsSmartPlanning] = useState(false);
   const [aiChatOpen, setAiChatOpen] = useState(false);
   const [aiChatInput, setAiChatInput] = useState('');
@@ -351,14 +380,15 @@ export default function App() {
   const [showRoutePanel, setShowRoutePanel] = useState(false);
   const [newTripModalVisible, setNewTripModalVisible] = useState(false);
   const [newTripName, setNewTripName] = useState('');
+  const [newTripDayCount, setNewTripDayCount] = useState(1);
+  const [newTripSelectedPlaceIds, setNewTripSelectedPlaceIds] = useState([]);
   
-  // 分段交通方式配置
+  // 鍒嗘浜ら€氭柟寮忛厤缃?
   const [segmentModes, setSegmentModes] = useState([]); 
   const [segmentRoutes, setSegmentRoutes] = useState([]); 
   const [, setIsCalculatingSegments] = useState(false);
   const [stayMinutesByPlace, setStayMinutesByPlace] = useState({});
   const [currentRouteDay, setCurrentRouteDay] = useState(1);
-  const [routeDayCount] = useState(1);
   const [lockMapViewport] = useState(true);
   const [mapView, setMapView] = useState(() => {
     try {
@@ -390,7 +420,7 @@ export default function App() {
   const aiRequestingRef = useRef(false);
   const routeCacheRef = useRef(new Map());
 
-  // --- 本地缓存备份 ---
+  // --- 鏈湴缂撳瓨澶囦唤 ---
   useEffect(() => { localStorage.setItem('travel_saved_places', JSON.stringify(savedPlaces)); }, [savedPlaces]);
   useEffect(() => { localStorage.setItem('travel_trips', JSON.stringify(trips)); }, [trips]);
   useEffect(() => { localStorage.setItem('travel_memos', JSON.stringify(globalMemos)); }, [globalMemos]);
@@ -413,7 +443,7 @@ export default function App() {
     });
   }, [currentCity]);
 
-  // --- 云端数据同步 ---
+  // --- 浜戠鏁版嵁鍚屾 ---
   useEffect(() => {
     if (user && !user.is_anonymous && supabase) {
       const fetchCloudData = async () => {
@@ -430,7 +460,7 @@ export default function App() {
               return Array.from(merged.values()).sort((a, b) => Number(b.savedAt || 0) - Number(a.savedAt || 0));
             });
           }
-          if (tRes.data) setTrips(tRes.data);
+          if (tRes.data) setTrips(tRes.data.map(normalizeTrip));
           if (mRes.data) setGlobalMemos(mRes.data);
         } catch(e) { console.error('Cloud fetch error', e); }
       };
@@ -438,7 +468,7 @@ export default function App() {
     }
   }, [user, supabase]);
 
-  // 初始化加载：高德地图 & Supabase
+  // 鍒濆鍖栧姞杞斤細楂樺痉鍦板浘 & Supabase
   useEffect(() => {
     if (!AMAP_CONFIG.key || !AMAP_CONFIG.jscode) {
       setMapStatus('no-key');
@@ -459,7 +489,7 @@ export default function App() {
                  });
                  geolocation.getCityInfo((status, result) => {
                      if(status === 'complete' && result.city) {
-                         const c = result.city.replace('市', '');
+                         const c = result.city.replace(/市$/, '');
                          setCurrentCity(c);
                          localStorage.setItem('lastCity', c);
                      }
@@ -468,14 +498,14 @@ export default function App() {
              }
           } else {
              setMapStatus('error');
-             setMapErrorMsg('脚本加载成功但 AMap 对象不存在');
+             setMapErrorMsg('地图脚本已加载，但 AMap 对象不可用');
           }
         };
         mapScript.src = `https://webapi.amap.com/maps?v=2.0&key=${AMAP_CONFIG.key}&plugin=AMap.AutoComplete,AMap.PlaceSearch,AMap.InputTips,AMap.Geocoder,AMap.GeometryUtil,AMap.Driving,AMap.Walking,AMap.Riding,AMap.Transfer,AMap.Geolocation&callback=_amapInitCallback`;
         mapScript.async = true;
         mapScript.onerror = () => {
           setMapStatus('error');
-          setMapErrorMsg('网络请求被拦截，请检查浏览器插件');
+          setMapErrorMsg('缃戠粶璇锋眰琚嫤鎴紝璇锋鏌ユ祻瑙堝櫒鎻掍欢');
         };
         document.head.appendChild(mapScript);
       }
@@ -535,7 +565,7 @@ export default function App() {
         try {
           if (window.AMap?.AutoComplete) {
             pending += 1;
-            const autoOptions = currentCity !== '全国' ? { city: currentCity, citylimit: true } : { city: '全国' };
+            const autoOptions = currentCity !== '鍏ㄥ浗' ? { city: currentCity, citylimit: true } : { city: '鍏ㄥ浗' };
             if (!autoComplete.current) autoComplete.current = new window.AMap.AutoComplete(autoOptions);
             autoComplete.current.search(searchQuery, (status, result) => {
               const tips = status === 'complete' && result?.tips ? result.tips : [];
@@ -547,7 +577,7 @@ export default function App() {
           if (window.AMap?.InputTips) {
             pending += 1;
             const inputTips = new window.AMap.InputTips({
-              city: currentCity === '全国' ? '全国' : currentCity,
+              city: currentCity === '鍏ㄥ浗' ? '鍏ㄥ浗' : currentCity,
               citylimit: false,
             });
             inputTips.search(searchQuery, (status, result) => {
@@ -560,7 +590,7 @@ export default function App() {
           if (window.AMap?.PlaceSearch) {
             pending += 1;
             const placeSearch = new window.AMap.PlaceSearch({
-              city: currentCity === '全国' ? '全国' : currentCity,
+              city: currentCity === '鍏ㄥ浗' ? '鍏ㄥ浗' : currentCity,
               citylimit: false,
               pageSize: 30,
               extensions: 'all',
@@ -595,11 +625,11 @@ export default function App() {
   }, [searchQuery, mapStatus, currentCity]);
 
   // ==========================================
-  // AI 核心调用逻辑 (DeepSeek)
+  // AI 鏍稿績璋冪敤閫昏緫 (DeepSeek)
   // ==========================================
   const callAiPlanner = async (payload) => {
     if (!AI_PLAN_API_URL) {
-      alert("请先配置 VITE_AI_PLAN_API_URL，并通过后端代理调用 AI，避免在前端暴露密钥。");
+      alert('请先配置 VITE_AI_PLAN_API_URL，并通过后端代理调用 AI。');
       return null;
     }
     try {
@@ -616,7 +646,7 @@ export default function App() {
       return data;
     } catch (e) {
       console.error("AI Planner API Error:", e);
-      alert("AI 调用失败，请检查代理服务或网络");
+      alert("AI 璋冪敤澶辫触锛岃妫€鏌ヤ唬鐞嗘湇鍔℃垨缃戠粶");
       return null;
     }
   };
@@ -645,12 +675,12 @@ export default function App() {
     if (!payload) return null;
     if (Array.isArray(payload)) {
       return {
-        routes: [{ title: `${currentCity} AI定制路线`, placeIds: payload }]
+        routes: [{ title: `${currentCity} AI瀹氬埗璺嚎`, placeIds: payload }]
       };
     }
     if (Array.isArray(payload.placeIds)) {
       return {
-        routes: [{ title: safeStr(payload.title) || `${currentCity} AI定制路线`, placeIds: payload.placeIds }]
+        routes: [{ title: safeStr(payload.title) || `${currentCity} AI瀹氬埗璺嚎`, placeIds: payload.placeIds }]
       };
     }
     if (Array.isArray(payload.days)) {
@@ -667,7 +697,7 @@ export default function App() {
   };
 
   const validatePlanPayload = (payload, cityPlaces) => {
-    if (!payload || !Array.isArray(payload.routes)) return { ok: false, reason: 'AI 未返回 routes 数组' };
+    if (!payload || !Array.isArray(payload.routes)) return { ok: false, reason: 'AI 鏈繑鍥?routes 鏁扮粍' };
     const validIds = new Set(cityPlaces.map((place) => place.id));
     const usedIds = new Set();
     const safeRoutes = payload.routes.map((route, index) => {
@@ -681,7 +711,7 @@ export default function App() {
         : [];
       return { title, placeIds };
     }).filter((route) => route.placeIds.length > 0);
-    if (!safeRoutes.length) return { ok: false, reason: 'AI 路线不包含有效收藏地点' };
+    if (!safeRoutes.length) return { ok: false, reason: 'AI 路线没有包含有效收藏地点' };
     return { ok: true, payload: { ...payload, routes: safeRoutes } };
   };
 
@@ -697,23 +727,25 @@ export default function App() {
         });
       if (ids.length === 0) return null;
       return {
-        id: `trip_${Date.now()}_${index}`,
-        name: safeStr(route?.title) || `${currentCity} AI定制 - Day ${index + 1}`,
+        id: `day_${index + 1}`,
+        title: safeStr(route?.title) || `Day ${index + 1}`,
         places: ids
       };
     }).filter(Boolean);
-    return safeRoutes;
+    if (!safeRoutes.length) return [];
+    return [normalizeTrip({
+      id: `trip_${Date.now()}`,
+      name: `${currentCity} AI行程`,
+      days: safeRoutes,
+    })];
   };
 
   const applyProposedTrips = async (newTrips) => {
     if (!newTrips?.length) {
-      alert('AI 方案中没有可执行的收藏地点，请先补充收藏。');
+      alert('AI 方案里没有可执行的收藏地点，请先补充收藏。');
       return;
     }
-    const normalizedTrips = newTrips.map((trip) => ({
-      ...trip,
-      places: Array.from(new Set(trip.places)),
-    }));
+    const normalizedTrips = newTrips.map((trip) => normalizeTrip(trip));
     const tripsToAdd = [...normalizedTrips].reverse();
     setTrips((prev) => [...tripsToAdd, ...prev]);
     if (user && !user.is_anonymous && supabase) {
@@ -767,7 +799,7 @@ export default function App() {
     })();
     const normalized = normalizePlanPayload(parsed) || {
       routes: [{
-        title: `${currentCity} AI路线`,
+        title: `${currentCity} AI璺嚎`,
         placeIds: cityPlaces.slice(0, 6).map((p) => p.id),
       }],
       summary: 'AI 返回格式不稳定，已为你生成可执行兜底路线。',
@@ -794,14 +826,22 @@ export default function App() {
     aiRequestingRef.current = false;
   };
 
+  const activeTrip = useMemo(() => (
+    activeTripId ? normalizeTrip(trips.find((trip) => trip.id === activeTripId)) : null
+  ), [activeTripId, trips]);
+  const routeDayCount = Math.max(1, activeTrip?.days?.length || 1);
   const tripPlaces = useMemo(() => (
-    showRoutePanel && activeTripId
-      ? (trips.find(t => t.id === activeTripId)?.places?.map(pid => savedPlaces.find(p => p.id === pid)).filter(Boolean) || [])
+    showRoutePanel && activeTrip
+      ? flattenTripPlaceIds(activeTrip).map((pid) => savedPlaces.find((p) => p.id === pid)).filter(Boolean)
       : []
-  ), [activeTripId, savedPlaces, showRoutePanel, trips]);
+  ), [activeTrip, savedPlaces, showRoutePanel]);
   const tripPlaceIds = useMemo(() => tripPlaces.map(p => p.id).join(','), [tripPlaces]);
 
-  // 获取分段路线详情（独立计算每一段的出行方式）
+  useEffect(() => {
+    setCurrentRouteDay((prev) => Math.min(Math.max(1, prev), routeDayCount));
+  }, [routeDayCount, activeTripId]);
+
+  // 鑾峰彇鍒嗘璺嚎璇︽儏锛堢嫭绔嬭绠楁瘡涓€娈电殑鍑鸿鏂瑰紡锛?
   useEffect(() => {
     if (!window.AMap || tripPlaces.length < 2 || !showRoutePanel) {
       setSegmentRoutes([]);
@@ -839,7 +879,7 @@ export default function App() {
              if (currentMode === 'walking' && window.AMap.Walking) searcher = new window.AMap.Walking();
              else if (currentMode === 'riding' && window.AMap.Riding) searcher = new window.AMap.Riding();
              else if (currentMode === 'transit' && window.AMap.Transfer) {
-               const safeCity = currentCity === '全国' ? '北京' : currentCity;
+               const safeCity = currentCity === '鍏ㄥ浗' ? '鍖椾含' : currentCity;
                searcher = new window.AMap.Transfer({ city: safeCity });
              }
              else if (window.AMap.Driving) searcher = new window.AMap.Driving();
@@ -900,11 +940,19 @@ export default function App() {
   };
   void setAllSegmentModes;
 
+  useEffect(() => {
+    setSegmentModes((prev) => {
+      const size = Math.max(0, tripPlaces.length - 1);
+      const next = new Array(size).fill('driving').map((mode, index) => prev[index] || mode);
+      return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
+    });
+  }, [tripPlaceIds, tripPlaces.length]);
+
   // ==========================================
-  // 云端同步写操作逻辑
+  // 浜戠鍚屾鍐欐搷浣滈€昏緫
   // ==========================================
   const handleSavePlace = async (placeData, stayOpen = false) => {
-    const placeName = safeStr(placeData.name) || '未知地点';
+    const placeName = safeStr(placeData.name) || '鏈煡鍦扮偣';
     const inferredCity = inferCityName(placeData, currentCity);
     const resolvedAddress = await resolveAddressForPlace(placeData);
     const dedupeKey = placeIdentityKey(placeData, currentCity);
@@ -913,7 +961,7 @@ export default function App() {
       id: existingByKey?.id || placeData.id || Date.now().toString(),
       name: placeName,
       location: placeData.location,
-      category: safeStr(placeData.category) || '景点',
+      category: safeStr(placeData.category) || '鏅偣',
       address: safeStr(resolvedAddress.address) || normalizeAddressText(placeData),
       district: safeStr(resolvedAddress.district) || safeStr(placeData.district) || safeStr(existingByKey?.district) || '',
       city: inferredCity,
@@ -936,14 +984,26 @@ export default function App() {
 
   const removePlace = async (id) => {
     setSavedPlaces(prev => prev.filter(p => p.id !== id));
-    setTrips(prev => prev.map((trip) => ({ ...trip, places: (trip.places || []).filter((pid) => pid !== id) })));
+    setTrips(prev => prev.map((trip) => normalizeTrip({
+      ...trip,
+      places: (trip.places || []).filter((pid) => pid !== id),
+      days: Array.isArray(trip.days)
+        ? trip.days.map((day) => ({ ...day, places: (day.places || []).filter((pid) => pid !== id) }))
+        : trip.days,
+    })));
     if (user && !user.is_anonymous && supabase) {
       try { await supabase.from('places').delete().eq('id', id); } catch(e){ logCloudError('Remove place', e); }
       try {
-        const impacted = trips.filter((trip) => (trip.places || []).includes(id));
+        const impacted = trips.filter((trip) => flattenTripPlaceIds(trip).includes(id));
         for (const trip of impacted) {
-          const nextPlaces = (trip.places || []).filter((pid) => pid !== id);
-          await supabase.from('trips').update({ places: nextPlaces }).eq('id', trip.id);
+          const nextTrip = normalizeTrip({
+            ...trip,
+            places: (trip.places || []).filter((pid) => pid !== id),
+            days: Array.isArray(trip.days)
+              ? trip.days.map((day) => ({ ...day, places: (day.places || []).filter((pid) => pid !== id) }))
+              : trip.days,
+          });
+          await supabase.from('trips').update({ places: nextTrip.places, days: nextTrip.days }).eq('id', trip.id);
         }
       } catch(e) { logCloudError('Sync trip places after remove place', e); }
     }
@@ -968,12 +1028,12 @@ export default function App() {
       try {
         const resolved = await new Promise((resolve) => {
           const ps = new window.AMap.PlaceSearch({
-            city: currentCity === '全国' ? '全国' : currentCity,
+            city: currentCity === '鍏ㄥ浗' ? '鍏ㄥ浗' : currentCity,
             citylimit: false,
             pageSize: 1,
             extensions: 'all',
           });
-          ps.searchNearBy(safeStr(placeData?.name) || '地点', location, 300, (status, result) => {
+          ps.searchNearBy(safeStr(placeData?.name) || '鍦扮偣', location, 300, (status, result) => {
             if (status !== 'complete' || !result?.poiList?.pois?.length) {
               resolve(null);
               return;
@@ -1029,9 +1089,10 @@ export default function App() {
   };
 
   const createTrip = async (newTrip) => {
-    setTrips(prev => [newTrip, ...prev]);
+    const normalizedTrip = normalizeTrip(newTrip);
+    setTrips(prev => [normalizedTrip, ...prev]);
     if (user && !user.is_anonymous && supabase) {
-      try { await supabase.from('trips').upsert({ ...newTrip, user_id: user.id }); } catch(e){ logCloudError('Create trip', e); }
+      try { await supabase.from('trips').upsert({ ...normalizedTrip, user_id: user.id }); } catch(e){ logCloudError('Create trip', e); }
     }
   };
 
@@ -1183,15 +1244,15 @@ export default function App() {
   };
 
   // ==========================================
-  // Auth 及其他操作
+  // Auth 鍙婂叾浠栨搷浣?
   // ==========================================
   const handleSendOtp = async () => {
-    if (!supabase) return setAuthMessage('请先在顶部配置正确的 Supabase 密钥');
-    if (!email) return setAuthMessage('请输入邮箱地址');
+    if (!supabase) return setAuthMessage('璇峰厛鍦ㄩ《閮ㄩ厤缃纭殑 Supabase 瀵嗛挜');
+    if (!email) return setAuthMessage('璇疯緭鍏ラ偖绠卞湴鍧€');
     setAuthLoading(true); setAuthMessage('');
     const { error } = await supabase.auth.signInWithOtp({ email });
     if (error) setAuthMessage(error.message);
-    else { setOtpSent(true); setAuthMessage('验证码已发送至您的邮箱'); }
+    else { setOtpSent(true); setAuthMessage('楠岃瘉鐮佸凡鍙戦€佽嚦鎮ㄧ殑閭'); }
     setAuthLoading(false);
   };
 
@@ -1204,12 +1265,12 @@ export default function App() {
 
   const handleGuestLogin = async () => {
     if (!supabase) {
-      setUser({ id: 'local-guest', is_anonymous: true, email: '本地游客' });
+      setUser({ id: 'local-guest', is_anonymous: true, email: '鏈湴娓稿' });
       return;
     }
     setAuthLoading(true); setAuthMessage('');
     const { error } = await supabase.auth.signInAnonymously();
-    if (error) setAuthMessage('游客登录失败，请确保 Supabase 后台开启了 Anonymous 登录');
+    if (error) setAuthMessage('娓稿鐧诲綍澶辫触锛岃纭繚 Supabase 鍚庡彴寮€鍚簡 Anonymous 鐧诲綍');
     setAuthLoading(false);
   };
 
@@ -1264,18 +1325,44 @@ export default function App() {
 
   const addPlaceToActiveTrip = async (placeId) => {
     if (!activeTripId) return;
-    let updatedPlaces = [];
+    let updatedTrip = null;
     setTrips((prevTrips) => prevTrips.map((trip) => {
       if (trip.id !== activeTripId) return trip;
-      const nextPlaces = Array.from(new Set([...(trip.places || []), placeId]));
-      updatedPlaces = nextPlaces;
-      return { ...trip, places: nextPlaces };
+      const normalized = normalizeTrip(trip);
+      const nextDays = normalized.days.map((day, index) => (
+        index === Math.max(0, currentRouteDay - 1)
+          ? { ...day, places: Array.from(new Set([...(day.places || []), placeId])) }
+          : day
+      ));
+      updatedTrip = normalizeTrip({ ...normalized, days: nextDays });
+      return updatedTrip;
     }));
-    if (user && !user.is_anonymous && supabase && updatedPlaces.length > 0) {
-      try { await supabase.from('trips').update({ places: updatedPlaces }).eq('id', activeTripId); } catch (e) { logCloudError('Add place to trip', e); }
+    if (user && !user.is_anonymous && supabase && updatedTrip) {
+      try { await supabase.from('trips').update({ places: updatedTrip.places, days: updatedTrip.days }).eq('id', activeTripId); } catch (e) { logCloudError('Add place to trip', e); }
     }
   };
   void addPlaceToActiveTrip;
+
+  const movePlaceToTripDay = async (placeId, targetDay) => {
+    if (!activeTripId) return;
+    let updatedTrip = null;
+    setTrips((prevTrips) => prevTrips.map((trip) => {
+      if (trip.id !== activeTripId) return trip;
+      const normalized = normalizeTrip(trip);
+      const nextDays = normalized.days.map((day, index) => {
+        const filteredPlaces = (day.places || []).filter((id) => id !== placeId);
+        if (index === targetDay - 1) {
+          return { ...day, places: [...filteredPlaces, placeId] };
+        }
+        return { ...day, places: filteredPlaces };
+      });
+      updatedTrip = normalizeTrip({ ...normalized, days: nextDays });
+      return updatedTrip;
+    }));
+    if (user && !user.is_anonymous && supabase && updatedTrip) {
+      try { await supabase.from('trips').update({ places: updatedTrip.places, days: updatedTrip.days }).eq('id', activeTripId); } catch (e) { logCloudError('Move trip place day', e); }
+    }
+  };
 
   const filteredFavs = savedPlaces.filter(p => 
     safeStr(p.name).toLowerCase().includes(favSearchQuery.toLowerCase()) ||
@@ -1283,7 +1370,7 @@ export default function App() {
   );
 
   const groupedFavorites = filteredFavs.reduce((acc, spot) => {
-    const city = spot.city || '其他城市';
+    const city = spot.city || '鍏朵粬鍩庡競';
     if (!acc[city]) acc[city] = [];
     acc[city].push(spot);
     return acc;
@@ -1324,7 +1411,7 @@ export default function App() {
                 className="w-full py-3.5 rounded-2xl text-white font-bold text-sm shadow-md transition-transform active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2" 
                 style={{ backgroundColor: COLORS.primary }}
               >
-                {authLoading ? <Loader2 size={16} className="animate-spin" /> : '发送验证码'}
+                {authLoading ? <Loader2 size={16} className="animate-spin" /> : '鍙戦€侀獙璇佺爜'}
               </button>
             </div>
           ) : (
@@ -1332,7 +1419,7 @@ export default function App() {
               <div className="relative">
                 <KeyRound className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
                 <input 
-                  type="text" placeholder="输入邮箱收到的 6 位验证码"
+                  type="text" placeholder="杈撳叆閭鏀跺埌鐨?6 浣嶉獙璇佺爜"
                   className="w-full pl-11 pr-4 py-3 rounded-2xl bg-gray-50 border-none outline-none text-sm focus:ring-2 tracking-widest"
                   style={{ '--tw-ring-color': COLORS.primary }}
                   value={otp} onChange={e => setOtp(e.target.value)}
@@ -1345,7 +1432,7 @@ export default function App() {
               >
                 {authLoading ? <Loader2 size={16} className="animate-spin" /> : '验证并登录'}
               </button>
-              <button onClick={() => setOtpSent(false)} className="text-xs text-slate-400 mt-2 hover:underline">返回修改邮箱</button>
+              <button onClick={() => setOtpSent(false)} className="text-xs text-slate-400 mt-2 hover:underline">杩斿洖淇敼閭</button>
             </div>
           )}
 
@@ -1393,7 +1480,8 @@ export default function App() {
   })();
   const totalDays = routeDayCount;
   const dayOptions = Array.from({ length: totalDays }, (_, idx) => idx + 1);
-  const currentDayRows = timelineRows.filter((row) => Number(stayMinutesByPlace[`day_${row.place.id}`] || 1) === currentRouteDay);
+  const currentDayPlaceIds = activeTrip?.days?.[currentRouteDay - 1]?.places || [];
+  const currentDayRows = timelineRows.filter((row) => currentDayPlaceIds.includes(row.place.id));
 
   return (
     <div className="min-h-[100dvh] w-full flex justify-center bg-gray-100 sm:bg-[#f0f4f8]">
@@ -1404,11 +1492,11 @@ export default function App() {
 
         <div className="flex-1 relative z-10 flex flex-col overflow-hidden min-h-0">
           
-          {/* ==================== 发现页面 ==================== */}
+          {/* ==================== 鍙戠幇椤甸潰 ==================== */}
           {activeTab === 'map' && (
             <div className="flex-1 flex flex-col animate-in fade-in min-h-0">
               <div className="px-6 shrink-0">
-                {!isSearching && <h2 className="text-2xl font-bold mb-4" style={{ color: COLORS.textDark }}>发现地点</h2>}
+                {!isSearching && <h2 className="text-2xl font-bold mb-4" style={{ color: COLORS.textDark }}>鍙戠幇鍦扮偣</h2>}
                 
                 <div className="flex items-center gap-3 mb-6">
                   {isSearching ? (
@@ -1429,7 +1517,7 @@ export default function App() {
                     <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
                     <input 
                       className="w-full pl-10 pr-4 py-3 rounded-full bg-white shadow-sm border border-gray-100 outline-none text-sm focus:ring-2 transition-all"
-                      placeholder={mapStatus === 'success' ? "搜索地点 / 酒店 / 景点..." : "请先配置高德 API 密钥"}
+                      placeholder={mapStatus === 'success' ? "鎼滅储鍦扮偣 / 閰掑簵 / 鏅偣..." : "璇峰厛閰嶇疆楂樺痉 API 瀵嗛挜"}
                       value={searchQuery}
                       onChange={e => setSearchQuery(e.target.value)}
                       onFocus={() => setIsSearching(true)}
@@ -1446,7 +1534,7 @@ export default function App() {
                     {searchQuery.length === 0 ? (
                       <div className="text-center py-20 text-slate-400 text-sm flex flex-col items-center">
                         <MapIcon size={32} className="mb-2 text-slate-200" />
-                        输入地点名称开始搜索
+                        杈撳叆鍦扮偣鍚嶇О寮€濮嬫悳绱?
                       </div>
                     ) : searchResults.length > 0 ? (
                       searchResults.map((p) => {
@@ -1477,13 +1565,13 @@ export default function App() {
                         );
                       })
                     ) : (
-                      <div className="text-center py-10 text-slate-400 text-sm">未找到相关地点，请尝试其他关键词</div>
+                      <div className="text-center py-10 text-slate-400 text-sm">鏈壘鍒扮浉鍏冲湴鐐癸紝璇峰皾璇曞叾浠栧叧閿瘝</div>
                     )}
                   </div>
                 ) : (
                   <div className="animate-in fade-in">
                     <RealMap 
-                      places={savedPlaces.filter(p => currentCity === '全国' || p.city === currentCity)} 
+                      places={savedPlaces.filter(p => currentCity === '鍏ㄥ浗' || p.city === currentCity)} 
                       mapStatus={mapStatus} 
                       mapErrorMsg={mapErrorMsg} 
                       currentCity={currentCity} 
@@ -1494,7 +1582,7 @@ export default function App() {
                     />
                     {savedPlaces.length === 0 && mapStatus === 'success' && (
                       <div className="bg-white p-4 rounded-2xl text-center text-xs text-slate-500 shadow-sm flex items-center justify-center gap-2">
-                        <LocateFixed size={14}/> 尝试在上方搜索框寻找想去的地方吧
+                        <LocateFixed size={14}/> 灏濊瘯鍦ㄤ笂鏂规悳绱㈡瀵绘壘鎯冲幓鐨勫湴鏂瑰惂
                       </div>
                     )}
                   </div>
@@ -1503,17 +1591,17 @@ export default function App() {
             </div>
           )}
 
-          {/* ==================== 收藏夹页面 ==================== */}
+          {/* ==================== 鏀惰棌澶归〉闈?==================== */}
           {activeTab === 'favorites' && (
             <div className="h-full flex flex-col animate-in fade-in bg-[#f0f4f8] min-h-0 overflow-x-hidden">
                <div className="px-6 pt-5 pb-3 bg-white shadow-sm z-10 shrink-0">
-                 <h2 className="text-2xl font-bold">我的收藏夹</h2>
+                 <h2 className="text-2xl font-bold">我的收藏</h2>
                  <div className="relative mt-4">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
                     <input 
                       value={favSearchQuery}
                       onChange={e => setFavSearchQuery(e.target.value)}
-                      placeholder="在收藏夹内搜索..."
+                      placeholder="鍦ㄦ敹钘忓す鍐呮悳绱?.."
                       className="w-full pl-9 pr-4 py-2.5 bg-gray-50 rounded-xl border border-transparent outline-none text-sm focus:bg-white focus:border-blue-100 focus:ring-2 transition-all"
                       style={{ '--tw-ring-color': COLORS.light }}
                     />
@@ -1529,7 +1617,7 @@ export default function App() {
                           onClick={() => setCollapsedCities((prev) => ({ ...prev, [city]: !prev[city] }))}
                           className="text-xs text-slate-500 px-2 py-1 rounded bg-white border border-gray-100"
                         >
-                          {collapsedCities[city] ? '展开' : '收起'}
+                          {collapsedCities[city] ? '灞曞紑' : '鏀惰捣'}
                         </button>
                       </div>
                       {!collapsedCities[city] ? <div className="grid gap-3">
@@ -1554,20 +1642,20 @@ export default function App() {
                     </div>
                   ))}
                   {savedPlaces.length === 0 && (
-                    <div className="text-center py-20 text-sm text-slate-400">还没收藏过地点哦</div>
+                    <div className="text-center py-20 text-sm text-slate-400">杩樻病鏀惰棌杩囧湴鐐瑰摝</div>
                   )}
                   {savedPlaces.length > 0 && Object.keys(groupedFavorites).length === 0 && (
-                    <div className="text-center py-10 text-sm text-slate-400">未找到符合搜索条件的收藏</div>
+                    <div className="text-center py-10 text-sm text-slate-400">鏈壘鍒扮鍚堟悳绱㈡潯浠剁殑鏀惰棌</div>
                   )}
                </div>
             </div>
           )}
 
-          {/* ==================== 行程页面 ==================== */}
+          {/* ==================== 琛岀▼椤甸潰 ==================== */}
           {activeTab === 'lists' && (
             <div className="h-full flex flex-col px-6 animate-in fade-in min-h-0">
                <div className="flex justify-between items-center py-4 shrink-0">
-                  <h2 className="text-2xl font-bold">我的行程</h2>
+                  <h2 className="text-2xl font-bold">鎴戠殑琛岀▼</h2>
                   <button onClick={() => setNewTripModalVisible(true)} className="w-10 h-10 rounded-full flex items-center justify-center bg-white shadow-sm active:scale-95"><Plus size={20} color={COLORS.primary}/></button>
                </div>
                <div className="flex-1 overflow-y-auto pb-24 space-y-4 pt-2 min-h-0">
@@ -1575,8 +1663,8 @@ export default function App() {
                     onClick={() => setAiChatOpen(true)}
                     className="w-full mt-3 bg-white p-4 rounded-2xl border border-[#ced6df] text-left shadow-sm active:scale-95 transition-transform"
                   >
-                    <p className="text-sm font-bold text-slate-700">AI 对话规划</p>
-                    <p className="text-[11px] text-slate-500 mt-1">输入需求后先生成提案，确认再一键应用，稳定可控</p>
+                    <p className="text-sm font-bold text-slate-700">AI 瀵硅瘽瑙勫垝</p>
+                    <p className="text-[11px] text-slate-500 mt-1">杈撳叆闇€姹傚悗鍏堢敓鎴愭彁妗堬紝纭鍐嶄竴閿簲鐢紝绋冲畾鍙帶</p>
                   </button>
 
                   <div className="h-px bg-gray-200 my-4"></div>
@@ -1604,7 +1692,7 @@ export default function App() {
                           ) : (
                              <div className="flex-1 flex items-center gap-2 min-w-0">
                                <h3 className="font-bold text-lg truncate text-slate-800">{safeStr(trip.name)}</h3>
-                               <button onClick={(e) => startEditingTrip(trip, e)} className="shrink-0 p-1.5 text-slate-300 hover:text-blue-500 hover:bg-blue-50 rounded-md transition-colors" title="修改名称">
+                               <button onClick={(e) => startEditingTrip(trip, e)} className="shrink-0 p-1.5 text-slate-300 hover:text-blue-500 hover:bg-blue-50 rounded-md transition-colors" title="淇敼鍚嶇О">
                                  <Edit2 size={14}/>
                                </button>
                              </div>
@@ -1613,7 +1701,7 @@ export default function App() {
                             <Trash2 size={16} />
                           </button>
                         </div>
-                        <p className="text-xs text-slate-400 flex items-center gap-1"><MapPin size={12}/> {trip.places?.length || 0} 个站点</p>
+                        <p className="text-xs text-slate-400 flex items-center gap-1"><MapPin size={12}/> {flattenTripPlaceIds(trip).length} 个地点 · {(trip.days?.length || 1)} 天</p>
                       </div>
                     ))
                   )}
@@ -1621,7 +1709,7 @@ export default function App() {
             </div>
           )}
 
-          {/* ==================== 备忘页面 ==================== */}
+          {/* ==================== 澶囧繕椤甸潰 ==================== */}
           {activeTab === 'memo' && (
             <div className="h-full flex flex-col animate-in fade-in bg-[#f0f4f8] min-h-0">
                <div className="px-6 py-5 bg-white shadow-sm z-10 shrink-0">
@@ -1636,7 +1724,7 @@ export default function App() {
                       value={newMemoText}
                       onChange={e => setNewMemoText(e.target.value)}
                       onKeyDown={e => e.key === 'Enter' && handleAddMemo()}
-                      placeholder="添加新备忘 (如: 遮阳帽)..."
+                      placeholder="娣诲姞鏂板蹇?(濡? 閬槼甯?..."
                       className="flex-1 px-3 py-2 text-sm outline-none bg-transparent"
                     />
                     <button 
@@ -1648,24 +1736,24 @@ export default function App() {
                     </button>
                  </div>
 
-                 {/* ✨ UI重塑：融入主色调的低饱和度标签按钮 */}
+                 {/* 鉁?UI閲嶅锛氳瀺鍏ヤ富鑹茶皟鐨勪綆楗卞拰搴︽爣绛炬寜閽?*/}
                  <div className="flex items-center gap-2 pb-2 mb-1 overflow-x-auto hide-scrollbar">
                     <button onClick={handleAddFromTemplate} className="shrink-0 flex items-center gap-1.5 px-4 py-2 bg-blue-50 text-blue-500 rounded-full text-xs font-bold active:scale-95 transition-all shadow-sm">
-                       <Sparkles size={14}/> 常用模板
+                       <Sparkles size={14}/> 甯哥敤妯℃澘
                     </button>
                     <button onClick={() => setShowMemoTemplateModal(true)} className="shrink-0 flex items-center gap-1 px-3 py-2 bg-gray-50 text-slate-500 rounded-full text-xs font-medium active:scale-95 transition-all hover:bg-gray-100">
-                       <Settings size={14}/> 设置
+                       <Settings size={14}/> 璁剧疆
                     </button>
                     <div className="flex-1"></div>
                     <button onClick={handleClearDone} className="shrink-0 flex items-center gap-1 px-3 py-2 text-slate-400 hover:text-red-500 rounded-full text-xs font-medium active:scale-95 transition-all hover:bg-red-50">
-                       <Trash2 size={14}/> 清理完成
+                       <Trash2 size={14}/> 娓呯悊瀹屾垚
                     </button>
                  </div>
                </div>
 
                <div className="flex-1 overflow-y-auto px-6 pb-24 space-y-3 min-h-0">
                   {globalMemos.length === 0 ? (
-                    <div className="text-center py-10 text-sm text-slate-400">备忘录空空如也，添加一些物品吧</div>
+                    <div className="text-center py-10 text-sm text-slate-400">澶囧繕褰曠┖绌哄涔燂紝娣诲姞涓€浜涚墿鍝佸惂</div>
                   ) : (
                     globalMemos.map(m => (
                       <div key={m.id} className="bg-white p-4 rounded-2xl shadow-sm flex items-center justify-between border border-gray-50 transition-transform">
@@ -1710,14 +1798,14 @@ export default function App() {
             </div>
           )}
 
-          {/* ==================== 我的页面 ==================== */}
+          {/* ==================== 鎴戠殑椤甸潰 ==================== */}
           {activeTab === 'profile' && (
             <div className="h-full flex flex-col items-center justify-center animate-in fade-in px-6">
               <div className="w-20 h-20 rounded-full mb-4 shadow-md flex items-center justify-center bg-white border-4 border-white">
                  <User size={32} color={COLORS.primary} />
               </div>
               <h2 className="text-xl font-bold text-slate-800">
-                {user?.is_anonymous ? '游客' : (user?.email || '旅行者')}
+                    {user?.is_anonymous ? '游客' : (user?.email || '旅行者')}
               </h2>
               
               <div className="mt-8 w-full bg-gray-50 rounded-3xl p-4 space-y-2 border border-gray-100">
@@ -1728,7 +1816,7 @@ export default function App() {
                    </span>
                 </div>
                 <div className="flex justify-between items-center p-3 bg-white rounded-2xl shadow-sm">
-                   <span className="text-sm font-bold text-gray-700">云端账号</span>
+                   <span className="text-sm font-bold text-gray-700">浜戠璐﹀彿</span>
                    <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${supabase && user && !user.is_anonymous ? 'text-blue-600 bg-blue-50' : 'text-slate-400 bg-slate-100'}`}>
                      {supabase && user && !user.is_anonymous ? '已连接 Supabase' : '未验证'}
                    </span>
@@ -1745,50 +1833,50 @@ export default function App() {
           )}
         </div>
 
-        {/* ==================== 底部导航 ==================== */}
+        {/* ==================== 搴曢儴瀵艰埅 ==================== */}
         <div className="shrink-0 bg-white shadow-[0_-4px_20px_rgba(0,0,0,0.03)] rounded-t-3xl z-30 pb-safe px-4 relative">
           <div className="flex justify-around items-center h-16">
             <button onClick={() => {setActiveTab('map'); setIsSearching(false);}} className={`flex flex-col items-center gap-1 ${activeTab==='map'?'text-[#95C2E2]':'text-slate-300'}`}>
-              <MapIcon size={20} /><span className="text-[10px] font-bold">发现</span>
+              <MapIcon size={20} /><span className="text-[10px] font-bold">鍙戠幇</span>
             </button>
             <button onClick={() => setActiveTab('favorites')} className={`flex flex-col items-center gap-1 ${activeTab==='favorites'?'text-[#95C2E2]':'text-slate-300'}`}>
-              <Heart size={20} /><span className="text-[10px] font-bold">收藏</span>
+              <Heart size={20} /><span className="text-[10px] font-bold">鏀惰棌</span>
             </button>
             <button onClick={() => setActiveTab('lists')} className={`flex flex-col items-center gap-1 ${activeTab==='lists'?'text-[#95C2E2]':'text-slate-300'}`}>
-              <List size={20} /><span className="text-[10px] font-bold">行程</span>
+              <List size={20} /><span className="text-[10px] font-bold">琛岀▼</span>
             </button>
             <button onClick={() => setActiveTab('memo')} className={`flex flex-col items-center gap-1 ${activeTab==='memo'?'text-[#95C2E2]':'text-slate-300'}`}>
-              <ClipboardList size={20} /><span className="text-[10px] font-bold">备忘</span>
+              <ClipboardList size={20} /><span className="text-[10px] font-bold">澶囧繕</span>
             </button>
             <button onClick={() => setActiveTab('profile')} className={`flex flex-col items-center gap-1 ${activeTab==='profile'?'text-[#95C2E2]':'text-slate-300'}`}>
-              <User size={20} /><span className="text-[10px] font-bold">我的</span>
+              <User size={20} /><span className="text-[10px] font-bold">鎴戠殑</span>
             </button>
           </div>
         </div>
 
-        {/* ===================== 弹窗组件群 ===================== */}
+        {/* ===================== 寮圭獥缁勪欢缇?===================== */}
         
-        {/* 城市选择 */}
+        {/* 鍩庡競閫夋嫨 */}
         {showCityPicker && (
           <div className="fixed inset-0 z-[130] flex items-end bg-black/40 backdrop-blur-sm animate-in fade-in">
             <div className="bg-white w-full h-[80vh] rounded-t-3xl flex flex-col pb-safe animate-in slide-in-from-bottom-full min-h-0">
                <div className="px-6 py-5 flex items-center justify-between border-b border-gray-50 shrink-0">
-                  <h3 className="text-xl font-bold">选择城市</h3>
+                  <h3 className="text-xl font-bold">閫夋嫨鍩庡競</h3>
                   <button onClick={() => setShowCityPicker(false)} className="p-2 bg-gray-50 rounded-full"><X size={18}/></button>
                </div>
                <div className="flex-1 overflow-y-auto p-6 min-h-0">
                  <div className="flex gap-2 mb-8">
                     <input 
                       type="text" value={customCityInput} onChange={e=>setCustomCityInput(e.target.value)}
-                      placeholder="输入城市名，如：沈阳"
+                      placeholder="杈撳叆鍩庡競鍚嶏紝濡傦細娌堥槼"
                       className="flex-1 px-4 py-3 rounded-xl bg-gray-50 border-none outline-none text-sm"
                     />
-                    <button onClick={() => {if(customCityInput) selectCity(customCityInput)}} className="px-5 rounded-xl text-white font-bold text-sm" style={{ backgroundColor: COLORS.primary }}>确定</button>
+                    <button onClick={() => {if(customCityInput) selectCity(customCityInput)}} className="px-5 rounded-xl text-white font-bold text-sm" style={{ backgroundColor: COLORS.primary }}>纭畾</button>
                  </div>
                  
-                 <h4 className="text-sm font-bold text-slate-400 mb-4">热门城市</h4>
+                 <h4 className="text-sm font-bold text-slate-400 mb-4">鐑棬鍩庡競</h4>
                  <div className="grid grid-cols-3 gap-3">
-                    <button onClick={() => selectCity('全国')} className={`py-3 rounded-xl font-bold text-sm ${currentCity === '全国' ? 'bg-blue-50 text-blue-500' : 'bg-gray-50 text-slate-600'}`}>全国</button>
+                    <button onClick={() => selectCity('鍏ㄥ浗')} className={`py-3 rounded-xl font-bold text-sm ${currentCity === '鍏ㄥ浗' ? 'bg-blue-50 text-blue-500' : 'bg-gray-50 text-slate-600'}`}>鍏ㄥ浗</button>
                     {HOT_CITIES.map(city => (
                       <button key={city} onClick={() => selectCity(city)} className={`py-3 rounded-xl font-bold text-sm active:scale-95 transition-all ${currentCity === city ? 'bg-blue-50 text-blue-500' : 'bg-gray-50 text-slate-600'}`}>
                         {city}
@@ -1800,7 +1888,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 新建行程 */}
+        {/* 鏂板缓琛岀▼ */}
         {newTripModalVisible && (
           <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/40 backdrop-blur-sm p-6 animate-in fade-in">
             <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl animate-in zoom-in-95">
@@ -1811,15 +1899,61 @@ export default function App() {
                 style={{ '--tw-ring-color': COLORS.light }}
                 value={newTripName} onChange={e => setNewTripName(e.target.value)}
               />
+              <div className="mb-4">
+                <p className="text-xs font-bold text-slate-500 mb-2">天数</p>
+                <select
+                  value={newTripDayCount}
+                  onChange={(e) => setNewTripDayCount(Math.max(1, Math.min(7, Number(e.target.value) || 1)))}
+                  className="w-full px-4 py-3 rounded-xl bg-gray-50 border-none outline-none text-sm"
+                >
+                  {Array.from({ length: 7 }, (_, idx) => idx + 1).map((day) => (
+                    <option key={`new_day_${day}`} value={day}>{day} 天</option>
+                  ))}
+                </select>
+              </div>
+              <div className="mb-6">
+                <p className="text-xs font-bold text-slate-500 mb-2">选择地点</p>
+                <div className="max-h-48 overflow-y-auto space-y-2 rounded-2xl bg-gray-50 p-3">
+                  {savedPlaces.length === 0 ? (
+                    <div className="text-xs text-slate-400 text-center py-4">先去收藏地点，再创建行程</div>
+                  ) : savedPlaces.map((place) => {
+                    const checked = newTripSelectedPlaceIds.includes(place.id);
+                    return (
+                      <button
+                        key={`new_trip_place_${place.id}`}
+                        type="button"
+                        onClick={() => setNewTripSelectedPlaceIds((prev) => checked ? prev.filter((id) => id !== place.id) : [...prev, place.id])}
+                        className={`w-full text-left px-3 py-2 rounded-xl border transition-colors ${checked ? 'bg-blue-50 border-blue-200 text-slate-700' : 'bg-white border-transparent text-slate-600'}`}
+                      >
+                        <div className="font-bold text-sm truncate">{safeStr(place.name)}</div>
+                        <div className="text-[11px] truncate text-slate-400">{safeStr(place.city)} {safeStr(place.address)}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
               <div className="flex gap-3">
-                <button className="flex-1 py-3 rounded-xl bg-gray-100 text-sm font-bold text-slate-600 active:scale-95" onClick={() => { setNewTripModalVisible(false); setNewTripName(''); }}>取消</button>
+                <button className="flex-1 py-3 rounded-xl bg-gray-100 text-sm font-bold text-slate-600 active:scale-95" onClick={() => { setNewTripModalVisible(false); setNewTripName(''); setNewTripDayCount(1); setNewTripSelectedPlaceIds([]); }}>鍙栨秷</button>
                 <button className="flex-1 py-3 rounded-xl text-white text-sm font-bold active:scale-95 disabled:opacity-50" style={{ backgroundColor: COLORS.primary }} disabled={!newTripName.trim()} onClick={() => {
                   if (newTripName.trim()) {
-                    createTrip({ id: Date.now().toString(), name: newTripName.trim(), places: [] });
+                    const dayCount = Math.max(1, newTripDayCount);
+                    const firstDayPlaces = Array.from(new Set(newTripSelectedPlaceIds));
+                    createTrip({
+                      id: Date.now().toString(),
+                      name: newTripName.trim(),
+                      places: firstDayPlaces,
+                      days: Array.from({ length: dayCount }, (_, index) => ({
+                        id: `day_${index + 1}`,
+                        title: `Day ${index + 1}`,
+                        places: index === 0 ? firstDayPlaces : [],
+                      })),
+                    });
                     setNewTripModalVisible(false);
                     setNewTripName('');
+                    setNewTripDayCount(1);
+                    setNewTripSelectedPlaceIds([]);
                   }
-                }}>确认创建</button>
+                }}>纭鍒涘缓</button>
               </div>
             </div>
           </div>
@@ -1830,8 +1964,8 @@ export default function App() {
             <div className="bg-[#f8f6f2] w-full rounded-t-3xl p-6 pb-safe max-h-[85vh] flex flex-col">
               <div className="flex items-center justify-between mb-4">
                 <div>
-                  <h3 className="text-lg font-bold text-slate-800">AI 对话规划</h3>
-                  <p className="text-[11px] text-slate-500 mt-1">先生成提案，再确认应用，避免不可执行结果</p>
+                  <h3 className="text-lg font-bold text-slate-800">AI 瀵硅瘽瑙勫垝</h3>
+                  <p className="text-[11px] text-slate-500 mt-1">鍏堢敓鎴愭彁妗堬紝鍐嶇‘璁ゅ簲鐢紝閬垮厤涓嶅彲鎵ц缁撴灉</p>
                 </div>
                 <button onClick={() => setAiChatOpen(false)} className="p-2 rounded-full bg-white"><X size={16} /></button>
               </div>
@@ -1839,7 +1973,7 @@ export default function App() {
               <div className="flex-1 overflow-y-auto space-y-3 pr-1">
                 {aiConversation.length === 0 ? (
                   <div className="text-xs text-slate-500 bg-white rounded-xl p-3 border border-[#e9e7e3]">
-                    示例：我想周末轻松逛1天，咖啡店加公园，最多6个点，步行少一点。
+                    绀轰緥锛氭垜鎯冲懆鏈交鏉鹃€?澶╋紝鍜栧暋搴楀姞鍏洯锛屾渶澶?涓偣锛屾琛屽皯涓€鐐广€?
                   </div>
                 ) : null}
                 {aiConversation.map((item, index) => (
@@ -1850,7 +1984,7 @@ export default function App() {
 
                 {aiProposal ? (
                   <div className="bg-white border border-[#ced6df] rounded-2xl p-4">
-                    <p className="text-sm font-bold text-slate-700 mb-2">提案预览</p>
+                    <p className="text-sm font-bold text-slate-700 mb-2">鎻愭棰勮</p>
                     <p className="text-xs text-slate-500 mb-3">{aiProposal.summary || '已生成可执行行程提案。'}</p>
                     <button
                       onClick={async () => {
@@ -1866,7 +2000,7 @@ export default function App() {
                       className="w-full py-3 rounded-xl text-white text-sm font-bold"
                       style={{ backgroundColor: COLORS.primary }}
                     >
-                      应用提案到行程
+                      搴旂敤鎻愭鍒拌绋?
                     </button>
                   </div>
                 ) : null}
@@ -1876,7 +2010,7 @@ export default function App() {
                 <input
                   value={aiChatInput}
                   onChange={(event) => setAiChatInput(event.target.value)}
-                  placeholder="告诉AI你的偏好：天数、节奏、预算、体力..."
+                  placeholder="鍛婅瘔AI浣犵殑鍋忓ソ锛氬ぉ鏁般€佽妭濂忋€侀绠椼€佷綋鍔?.."
                   className="flex-1 px-4 py-3 rounded-xl bg-white border border-[#ced6df] outline-none text-sm"
                 />
                 <button
@@ -1885,7 +2019,7 @@ export default function App() {
                   className="px-5 rounded-xl text-white text-sm font-bold disabled:opacity-50"
                   style={{ backgroundColor: COLORS.primary }}
                 >
-                  发送
+                  鍙戦€?
                 </button>
               </div>
             </div>
@@ -1893,7 +2027,7 @@ export default function App() {
         )}
 
         {/* ==================================================== */}
-        {/* 行程路线展示弹窗：分段交通与自由排序升级 */}
+        {/* 琛岀▼璺嚎灞曠ず寮圭獥锛氬垎娈典氦閫氫笌鑷敱鎺掑簭鍗囩骇 */}
         {/* ==================================================== */}
         {showRoutePanel && activeTripId && (
           <div className="fixed inset-0 z-[120] flex flex-col bg-slate-50 min-h-0">
@@ -1903,50 +2037,54 @@ export default function App() {
             </div>
             <div className="flex-1 overflow-hidden">
               <div className="flex flex-col h-full border border-slate-200 rounded-xl overflow-hidden mx-4 my-4 bg-slate-50">
-                <div className="relative h-[32%] min-h-[190px] bg-slate-200 shrink-0">
+                <div className="relative h-[28%] min-h-[168px] bg-slate-200 shrink-0">
                   <RealMap places={tripPlaces} isRoute={true} mapStatus={mapStatus} currentCity={currentCity} lockViewport={lockMapViewport} mapView={routeMapView} onMapViewChange={setRouteMapView} routeModes={segmentModes} />
                 </div>
-                <div className="flex-1 flex flex-col relative bg-white rounded-t-[28px] -mt-3 z-20 shadow-[0_-14px_30px_rgba(0,0,0,0.06)] overflow-hidden">
-                  <div className="px-8 pt-8 pb-4 flex items-center justify-between shrink-0">
+                <div className="flex-1 flex flex-col relative bg-white rounded-t-[24px] -mt-1 z-20 shadow-[0_-10px_24px_rgba(0,0,0,0.05)] overflow-hidden">
+                  <div className="px-6 pt-6 pb-3 flex items-center justify-between shrink-0">
                     <button onClick={() => setCurrentRouteDay((d) => Math.max(1, d - 1))} className={`p-2 rounded-full ${currentRouteDay === 1 ? 'opacity-10 pointer-events-none' : 'text-slate-400 hover:bg-slate-100'}`}><ChevronLeft size={24} /></button>
                     <div className="text-center">
                       <span className="block text-[10px] font-black tracking-[0.3em] mb-1 uppercase" style={{ color: COLORS.primary }}>Route Planner</span>
-                      <h2 className="font-black text-2xl text-slate-800">Day {currentRouteDay}</h2>
+                      <h2 className="font-black text-xl text-slate-800">{safeStr(activeTrip?.name) || `Day ${currentRouteDay}`}</h2>
+                      <p className="text-[11px] text-slate-400 mt-1">Day {currentRouteDay} / {totalDays}</p>
                     </div>
                     <button onClick={() => setCurrentRouteDay((d) => Math.min(totalDays, d + 1))} className={`p-2 rounded-full ${currentRouteDay === totalDays ? 'opacity-10 pointer-events-none' : 'text-slate-400 hover:bg-slate-100'}`}><ChevronRight size={24} /></button>
                   </div>
-                  <main className="flex-1 overflow-y-auto px-6 pt-2 pb-24 hide-scrollbar">
+                  <main className="flex-1 overflow-y-auto px-5 pt-2 pb-24 hide-scrollbar">
                     <div className="space-y-5">
                       {currentDayRows.map((row) => {
                         const rowIndex = timelineRows.findIndex((item) => item.id === row.id);
                         const segMode = segmentModes[Math.max(0, rowIndex - 1)] || 'driving';
+                        const transitMinute = row.transitMinute || 0;
+                        const modeLabel = segMode === 'transit' ? '公交' : segMode === 'riding' ? '骑行' : segMode === 'walking' ? '步行' : '驾车';
                         return (
                           <div key={`timeline_${row.id}`} className="group bg-white rounded-[28px] p-5 border border-slate-100 shadow-sm hover:shadow-lg transition-all relative">
                             <div className="flex justify-between items-start gap-3">
                               <div className="flex gap-4 min-w-0">
-                                <div className="w-10 h-16 rounded-[18px] shrink-0 text-white flex items-start justify-center pt-3" style={{ backgroundColor: COLORS.primary }}><MapPin size={14} /></div>
+                                <div className="w-8 h-12 rounded-[16px] shrink-0 text-white flex items-start justify-center pt-2.5" style={{ backgroundColor: COLORS.primary }}><MapPin size={12} /></div>
                                 <div className="flex flex-col gap-1 min-w-0">
-                                  <h3 className="font-bold text-slate-800 text-base truncate">{safeStr(row.place.name)}</h3>
-                                  <div className="text-[10px] text-slate-400 truncate">{normalizeAddressText(row.place)}</div>
+                                  <h3 className="font-bold text-slate-800 text-sm truncate">{safeStr(row.place.name)}</h3>
+                                  <div className="text-[9px] text-slate-400 truncate">{normalizeAddressText(row.place)}</div>
                                   <div className="flex items-center flex-wrap gap-2 text-slate-400 mt-1">
                                     <div className="flex items-center gap-1">
                                       <Clock size={14} />
-                                      <span className="text-[11px]">停留</span>
+                                      <span className="text-[11px]">鍋滅暀</span>
                                       <input type="number" min={15} step={5} value={Number(stayMinutesByPlace[row.place.id]) || row.stayMinutes} onChange={(event) => setStayMinutesByPlace((prev) => ({ ...prev, [row.place.id]: Math.max(15, Number(event.target.value) || 15) }))} className="w-16 bg-slate-50 text-slate-700 font-bold outline-none text-[11px] px-1 rounded border border-slate-200" />
-                                      <span className="text-[11px]">分钟</span>
+                                      <span className="text-[11px]">鍒嗛挓</span>
                                     </div>
+                                    {rowIndex > 0 ? <div className="text-[11px] px-2 py-0.5 rounded-full bg-slate-50 border border-slate-100 text-slate-500">{modeLabel} · {transitMinute} 分钟</div> : null}
                                   </div>
                                 </div>
                               </div>
                               <div className="w-24 shrink-0">
-                                <select value={Number(stayMinutesByPlace[`day_${row.place.id}`] || currentRouteDay)} onChange={(event) => setStayMinutesByPlace((prev) => ({ ...prev, [`day_${row.place.id}`]: Math.max(1, Math.min(totalDays, Number(event.target.value) || 1)) }))} className="mb-2 w-full px-2 py-1 rounded-xl border border-slate-200 text-xs font-bold bg-white">
+                                <select value={currentDayPlaceIds.includes(row.place.id) ? currentRouteDay : Math.max(1, Math.min(totalDays, Number(stayMinutesByPlace[`day_${row.place.id}`] || currentRouteDay)))} onChange={(event) => movePlaceToTripDay(row.place.id, Math.max(1, Math.min(totalDays, Number(event.target.value) || 1)))} className="mb-2 w-full px-2 py-1 rounded-xl border border-slate-200 text-xs font-bold bg-white">
                                   {dayOptions.map((d) => <option key={`d_${row.id}_${d}`} value={d}>D{d}</option>)}
                                 </select>
                                 <select value={segMode} onChange={(event) => { if (rowIndex > 0) handleSegmentModeChange(rowIndex - 1, event.target.value); }} className="w-full px-2 py-1 rounded-xl border border-slate-200 text-xs font-bold bg-white">
-                                  <option value="driving">驾车</option>
-                                  <option value="transit">公交</option>
-                                  <option value="riding">骑行</option>
-                                  <option value="walking">步行</option>
+                                  <option value="driving">椹捐溅</option>
+                                  <option value="transit">鍏氦</option>
+                                  <option value="riding">楠戣</option>
+                                  <option value="walking">姝ヨ</option>
                                 </select>
                               </div>
                             </div>
@@ -1966,7 +2104,7 @@ export default function App() {
                         <div key={`page_${d}`} onClick={() => setCurrentRouteDay(d)} className={`h-1.5 rounded-full transition-all duration-500 cursor-pointer ${currentRouteDay === d ? 'w-10 shadow-lg' : 'w-1.5 bg-slate-200'}`} style={currentRouteDay === d ? { backgroundColor: COLORS.primary } : {}} />
                       ))}
                     </div>
-                    <p className="text-[10px] text-slate-300 font-black uppercase tracking-[0.4em]">Slide to explore</p>
+                    <p className="text-[10px] text-slate-300 font-black uppercase tracking-[0.3em]">Tap dots or arrows</p>
                   </div>
                 </div>
               </div>
@@ -1979,8 +2117,8 @@ export default function App() {
             <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[80vh]">
               <div className="flex justify-between items-center mb-4 shrink-0">
                 <div>
-                  <h3 className="text-lg font-bold text-slate-800">设置常用备忘</h3>
-                  <p className="text-[10px] text-slate-400 mt-1">一键添加时将自动引入这些物品</p>
+                  <h3 className="text-lg font-bold text-slate-800">璁剧疆甯哥敤澶囧繕</h3>
+                  <p className="text-[10px] text-slate-400 mt-1">一键添加时将自动带入这些物品</p>
                 </div>
                 <button onClick={() => setShowMemoTemplateModal(false)} className="p-1.5 bg-gray-50 rounded-full hover:bg-gray-100 transition-colors"><X size={16}/></button>
               </div>
@@ -1998,7 +2136,7 @@ export default function App() {
                         setNewTemplateItem('');
                      }
                    }}
-                   placeholder="添加新模板物品..."
+                   placeholder="娣诲姞鏂版ā鏉跨墿鍝?.."
                    className="flex-1 px-4 py-2.5 rounded-xl bg-gray-50 border-none outline-none text-sm focus:ring-2 focus:ring-blue-100"
                  />
                  <button
@@ -2010,11 +2148,11 @@ export default function App() {
                    }}
                    className="px-5 rounded-xl text-white font-bold text-sm transition-transform active:scale-95"
                    style={{ backgroundColor: COLORS.primary }}
-                 >新增</button>
+                 >鏂板</button>
               </div>
               
               <div className="flex-1 overflow-y-auto space-y-2 mb-6 pr-1 min-h-0">
-                 {memoTemplate.length === 0 ? <p className="text-xs text-slate-400 text-center py-6">暂无常用物品</p> : null}
+                 {memoTemplate.length === 0 ? <p className="text-xs text-slate-400 text-center py-6">鏆傛棤甯哥敤鐗╁搧</p> : null}
                  {memoTemplate.map((item, idx) => (
                     <div key={idx} className="flex justify-between items-center bg-white border border-gray-100 px-4 py-3 rounded-xl shadow-sm">
                        <span className="text-slate-700 text-sm font-medium">{item}</span>
@@ -2030,12 +2168,12 @@ export default function App() {
                 className="w-full py-3.5 rounded-xl text-white text-sm font-bold active:scale-95 shadow-md shrink-0" 
                 style={{ backgroundColor: COLORS.primary }}
                 onClick={() => setShowMemoTemplateModal(false)}
-              >完成设置</button>
+              >瀹屾垚璁剧疆</button>
             </div>
           </div>
         )}
 
-        {/* 收藏详情弹窗 (轻量级悬浮卡片) */}
+        {/* 鏀惰棌璇︽儏寮圭獥 (杞婚噺绾ф偓娴崱鐗? */}
         {selectedPlace && (
           <div className="fixed bottom-24 left-6 right-6 z-[100] bg-white/95 backdrop-blur-xl rounded-3xl p-5 shadow-2xl border border-white/50 animate-in slide-in-from-bottom-8 flex items-center justify-between">
             <div className="flex-1 min-w-0 pr-4">
@@ -2059,7 +2197,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 收藏夹起点规划周边浮层 */}
+        {/* 鏀惰棌澶硅捣鐐硅鍒掑懆杈规诞灞?*/}
         {routeBuilderStart && (
           <div className="fixed inset-0 z-[150] flex items-end bg-black/40 backdrop-blur-sm animate-in fade-in">
              <div className="bg-white w-full rounded-t-3xl p-6 pb-safe animate-in slide-in-from-bottom-full min-h-0">
@@ -2073,10 +2211,10 @@ export default function App() {
                 
                 {(() => {
                    const recs = getRecommendations(routeBuilderStart);
-                   if (recs.length === 0) return <p className="text-sm text-slate-400 py-6 text-center">附近 10km 内没有其他已收藏的地点</p>;
+                   if (recs.length === 0) return <p className="text-sm text-slate-400 py-6 text-center">附近 10km 内没有其他已收藏地点</p>;
                    return (
                       <div className="space-y-3 mb-6 flex-1 overflow-y-auto min-h-0">
-                         <h4 className="text-sm font-bold text-slate-600 flex items-center gap-1.5"><Sparkles size={14} color="#FCD34D"/> 推荐顺路一起去：</h4>
+                         <h4 className="text-sm font-bold text-slate-600 flex items-center gap-1.5"><Sparkles size={14} color="#FCD34D"/> 推荐顺路一起去</h4>
                          {recs.map(r => (
                             <div 
                               key={r.id} 
@@ -2088,7 +2226,7 @@ export default function App() {
                             >
                                <div className="flex-1 min-w-0 pr-4">
                                   <p className="font-bold text-sm text-slate-700 truncate">{r.name}</p>
-                                  <p className="text-[11px] text-slate-400 mt-1">距离起点 {(r.distance/1000).toFixed(1)} km</p>
+                                  <p className="text-[11px] text-slate-400 mt-1">璺濈璧风偣 {(r.distance/1000).toFixed(1)} km</p>
                                </div>
                                {routeBuilderTargets.includes(r.id) ? <CheckCircle2 size={20} className="text-blue-500 shrink-0" /> : <Circle size={20} className="text-slate-200 shrink-0" />}
                             </div>
@@ -2102,8 +2240,13 @@ export default function App() {
                      const newTripId = 'trip_' + Date.now().toString();
                      createTrip({
                         id: newTripId,
-                        name: `从 ${routeBuilderStart.name} 出发`,
-                        places: [routeBuilderStart.id, ...routeBuilderTargets]
+                        name: `浠?${routeBuilderStart.name} 鍑哄彂`,
+                        places: [routeBuilderStart.id, ...routeBuilderTargets],
+                        days: [{
+                          id: 'day_1',
+                          title: 'Day 1',
+                          places: [routeBuilderStart.id, ...routeBuilderTargets],
+                        }],
                      });
                      setRouteBuilderStart(null);
                      setActiveTab('lists');
@@ -2113,7 +2256,7 @@ export default function App() {
                   className="w-full py-4 rounded-2xl text-white font-bold shadow-lg active:scale-95 transition-transform flex justify-center items-center gap-2 shrink-0"
                   style={{ backgroundColor: COLORS.primary }}
                 >
-                  <Navigation size={18}/> 规划路线并加入行程
+                  <Navigation size={18}/> 瑙勫垝璺嚎骞跺姞鍏ヨ绋?
                 </button>
              </div>
           </div>
@@ -2124,3 +2267,4 @@ export default function App() {
     </div>
   );
 }
+
