@@ -1,26 +1,26 @@
-# TravelMap
+﻿# TravelMap
 
-TravelMap 是一个基于 React + Vite 的旅行地图 PWA，用于收藏地点、规划行程、管理旅行备忘，并支持 Supabase 云同步。
+TravelMap is a React + Vite travel map PWA for saving places, planning trips, and managing travel memos with optional Supabase sync.
 
-## 功能
+## Features
 
-- 高德地图地点搜索、地图展示、城市切换与路线规划
-- 收藏地点并按城市分组管理
-- 创建自定义行程，调整地点顺序和分段交通方式
-- 旅行备忘清单与常用模板
-- Supabase 邮箱验证码登录、游客模式和云端同步
-- 通过后端代理接入 AI 行程规划，避免在前端暴露 AI 密钥
+- AMap place search, map view, city switch, and route planning
+- Save places and group them by city
+- Build custom trips, reorder stops, and configure transport per segment
+- Travel memo checklist with reusable templates
+- Supabase email OTP login, guest mode, and cloud sync
+- AI trip planning through backend proxy (avoid exposing AI vendor key on frontend)
 
-## 本地开发
+## Local development
 
 ```bash
 npm install
 npm run dev
 ```
 
-## 环境变量
+## Environment variables
 
-在 `.env` 中配置：
+Set these in `.env`:
 
 ```env
 VITE_AMAP_KEY=
@@ -28,21 +28,30 @@ VITE_AMAP_JSCODE=
 VITE_SUPABASE_URL=
 VITE_SUPABASE_KEY=
 VITE_AI_PLAN_API_URL=
+
+# Backend-only variables (server runtime)
+ALIYUN_API_KEY=
+ALIYUN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+ALIYUN_MODEL=qwen-plus
+AI_PLAN_BEARER_TOKEN=
 ```
 
-`VITE_AI_PLAN_API_URL` 应指向你自己的后端代理接口（推荐由后端再去调用阿里云模型，避免前端泄露 key）。
+Notes:
+- `VITE_AI_PLAN_API_URL` should point to your own backend endpoint (for example `/api/ai/plan`).
+- `AI_PLAN_BEARER_TOKEN` is required by `api/ai/plan.js` and must be sent by frontend via `Authorization: Bearer <token>`.
+- `VITE_SUPABASE_KEY` is public anon key by design; make sure your Supabase tables are protected with strict RLS policies.
 
-## AI 接口契约（建议）
+## AI API contract (recommended)
 
-前端会以 `POST` JSON 请求 AI 规划接口，典型请求体：
+Frontend sends `POST` JSON:
 
 ```json
 {
   "action": "plan",
-  "prompt": "我想周末轻松逛1天，咖啡店+公园",
-  "city": "上海",
+  "prompt": "Relaxed weekend plan with cafe and park",
+  "city": "Shanghai",
   "places": [
-    { "id": "p1", "name": "武康大楼", "category": "景点", "address": "..." }
+    { "id": "p1", "name": "Wukang Mansion", "category": "Attraction", "address": "..." }
   ],
   "currentTrip": null,
   "preferences": {
@@ -52,29 +61,23 @@ VITE_AI_PLAN_API_URL=
 }
 ```
 
-后端返回建议优先用下面结构（最稳）：
+Recommended response:
 
 ```json
 {
   "proposal": {
-    "summary": "轻松路线，减少跨区移动",
+    "summary": "Relaxed route with less cross-district travel",
     "routes": [
       { "title": "Day 1", "placeIds": ["p1", "p2", "p3"] }
     ],
     "goodieBag": [
-      { "name": "某咖啡馆", "hint": "适合下午休息" }
+      { "name": "Cafe Name", "hint": "Great for afternoon break" }
     ]
   }
 }
 ```
 
-兼容返回（旧格式）也可继续工作：
-
-- `{ "content": "..." }`
-- `{ "text": "..." }`
-- OpenAI 兼容：`{ "choices": [{ "message": { "content": "..." } }] }`
-
-## 常用脚本
+## Scripts
 
 ```bash
 npm run lint

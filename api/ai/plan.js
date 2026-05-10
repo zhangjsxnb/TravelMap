@@ -1,4 +1,4 @@
-const SYSTEM_PROMPT = [
+﻿const SYSTEM_PROMPT = [
   "You are a reliable travel planning assistant.",
   "Return JSON only.",
   "Use provided places for routes.",
@@ -6,8 +6,60 @@ const SYSTEM_PROMPT = [
   "Keep routes practical and concise.",
 ].join(" ");
 
+const MAX_REQUEST_BYTES = 50 * 1024;
+const MAX_PROMPT_LENGTH = 1000;
+const MAX_PLACES = 100;
+const RATE_WINDOW_MS = 60 * 1000;
+const RATE_MAX_REQUESTS = 20;
+const memoryRateLimit = new Map();
+
 function safeString(value) {
   return typeof value === "string" ? value : "";
+}
+
+function safeJsonStringify(value) {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "{}";
+  }
+}
+
+function getRequestIp(req) {
+  const fromForward = safeString(req.headers?.["x-forwarded-for"]).split(",")[0].trim();
+  return fromForward || safeString(req.socket?.remoteAddress) || "unknown";
+}
+
+function getClientKey(req) {
+  const auth = safeString(req.headers?.authorization);
+  return `${getRequestIp(req)}|${auth.slice(0, 24)}`;
+}
+
+function enforceRateLimit(req) {
+  const now = Date.now();
+  const key = getClientKey(req);
+  const history = memoryRateLimit.get(key) || [];
+  const kept = history.filter((ts) => now - ts < RATE_WINDOW_MS);
+
+  if (kept.length >= RATE_MAX_REQUESTS) {
+    return false;
+  }
+
+  kept.push(now);
+  memoryRateLimit.set(key, kept);
+
+  if (memoryRateLimit.size > 10000) {
+    memoryRateLimit.clear();
+  }
+
+  return true;
+}
+
+function isAuthorized(req) {
+  const expected = process.env.AI_PLAN_BEARER_TOKEN || "";
+  if (!expected) return false;
+  const authHeader = safeString(req.headers?.authorization);
+  return authHeader === `Bearer ${expected}`;
 }
 
 function parseModelContent(content) {
@@ -65,7 +117,7 @@ function normalizeProposal(rawProposal) {
   if (!routes.length) return null;
 
   return {
-    summary: safeString(rawProposal.summary) || "已生成可执行行程提案。",
+    summary: safeString(rawProposal.summary) || "Generated an executable route proposal.",
     routes,
     goodieBag,
   };
@@ -88,7 +140,7 @@ function createFallbackProposal(places) {
   const ids = places.map((place) => place.id).filter((id) => typeof id === "string").slice(0, 6);
   if (!ids.length) return null;
   return {
-    summary: "按收藏顺序生成了保底路线。",
+    summary: "Generated a fallback route by saved order.",
     routes: [{ title: "Day 1", placeIds: ids }],
     goodieBag: [],
   };
@@ -97,6 +149,16 @@ function createFallbackProposal(places) {
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
+  if (!isAuthorized(req)) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  if (!enforceRateLimit(req)) {
+    res.status(429).json({ error: "Too many requests" });
     return;
   }
 
@@ -110,9 +172,15 @@ export default async function handler(req, res) {
   }
 
   const body = req.body || {};
-  const prompt = safeString(body.prompt);
-  const city = safeString(body.city) || "全国";
-  const places = Array.isArray(body.places) ? body.places : [];
+  const bodyRaw = safeJsonStringify(body);
+  if (bodyRaw.length > MAX_REQUEST_BYTES) {
+    res.status(413).json({ error: "Request too large" });
+    return;
+  }
+
+  const prompt = safeString(body.prompt).slice(0, MAX_PROMPT_LENGTH);
+  const city = safeString(body.city) || "Global";
+  const places = Array.isArray(body.places) ? body.places.slice(0, MAX_PLACES) : [];
   const currentTrip = body.currentTrip || null;
   const preferences = body.preferences || {};
 
@@ -120,9 +188,9 @@ export default async function handler(req, res) {
     `Action: ${safeString(body.action) || "plan"}`,
     `City: ${city}`,
     `User request: ${prompt || "Generate a practical route."}`,
-    `Preferences: ${JSON.stringify(preferences)}`,
-    `Current trip: ${JSON.stringify(currentTrip)}`,
-    `Places: ${JSON.stringify(places)}`,
+    `Preferences: ${safeJsonStringify(preferences)}`,
+    `Current trip: ${safeJsonStringify(currentTrip)}`,
+    `Places: ${safeJsonStringify(places)}`,
     'Output JSON schema: {"summary":"...","routes":[{"title":"Day 1","placeIds":["..."]}],"goodieBag":[{"name":"...","hint":"..."}]}',
   ].join("\n");
 
@@ -144,8 +212,7 @@ export default async function handler(req, res) {
     });
 
     if (!response.ok) {
-      const text = await response.text();
-      res.status(response.status).json({ error: "Upstream model error", details: text });
+      res.status(502).json({ error: "Upstream model error" });
       return;
     }
 
@@ -157,7 +224,7 @@ export default async function handler(req, res) {
     const fallback = createFallbackProposal(places);
 
     if (!validated && !fallback) {
-      res.status(422).json({ error: "No executable proposal generated", content });
+      res.status(422).json({ error: "No executable proposal generated" });
       return;
     }
 
@@ -166,6 +233,7 @@ export default async function handler(req, res) {
       raw: content,
     });
   } catch (error) {
-    res.status(500).json({ error: "Planner route failed", details: safeString(error?.message) });
+    console.error("Planner route failed", error);
+    res.status(500).json({ error: "Planner route failed" });
   }
 }
