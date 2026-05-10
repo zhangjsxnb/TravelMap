@@ -1881,204 +1881,84 @@ export default function App() {
         {/* 行程路线展示弹窗：分段交通与自由排序升级 */}
         {/* ==================================================== */}
         {showRoutePanel && activeTripId && (
-          <div className="fixed inset-0 z-[120] flex flex-col bg-white animate-in slide-in-from-bottom-full min-h-0">
-            <div className="px-6 py-5 flex items-center justify-between sticky top-0 bg-white/90 backdrop-blur z-20 border-b border-gray-50 shrink-0">
-               <div>
-                 <h2 className="text-xl font-bold">行程规划与地图</h2>
-               </div>
-               <button onClick={() => {setShowRoutePanel(false);}} className="p-2 bg-gray-50 rounded-full"><X size={20}/></button>
+          <div className="fixed inset-0 z-[120] flex flex-col bg-slate-50 min-h-0">
+            <div className="px-6 py-5 flex items-center justify-between border-b border-slate-100 shrink-0 bg-white">
+              <h2 className="text-2xl font-black text-slate-800">???????</h2>
+              <button onClick={() => setShowRoutePanel(false)} className="p-2 rounded-full bg-slate-100"><X size={20} /></button>
             </div>
-            <div className="flex-1 overflow-y-auto pb-10 min-h-0">
-              <div className="p-6 pb-2 space-y-6">
-                 
-                 {/* 传递独立分段交通方式给地图 */}
-                 <RealMap 
-                   places={tripPlaces} 
-                   isRoute={true} 
-                   mapStatus={mapStatus} 
-                   currentCity={currentCity}
-                   lockViewport={lockMapViewport}
-                   mapView={routeMapView}
-                   onMapViewChange={setRouteMapView}
-                   routeModes={segmentModes} 
-                 />
-
-                 <div className="bg-gray-50 rounded-3xl p-5 border border-gray-100">
-                    <div className="mb-5 bg-white border border-[#e9e7e3] rounded-2xl p-4">
-                      <div className="flex items-center justify-between mb-2">
-                        <h3 className="font-bold text-slate-700 text-sm">从收藏添加地点</h3>
-                        <span className="text-[10px] text-slate-400">可直接加入当前行程</span>
-                      </div>
-                      <div className="flex gap-2 overflow-x-auto hide-scrollbar pb-1">
-                        {savedPlaces
-                          .slice(0, 30)
-                          .map((place) => {
-                            const added = tripPlaces.some((tripPlace) => tripPlace.id === place.id);
-                            return (
-                              <button
-                                key={`add_trip_${place.id}`}
-                                disabled={added}
-                                onClick={() => addPlaceToActiveTrip(place.id)}
-                                className={`shrink-0 px-3 py-2 rounded-xl text-xs border ${added ? 'bg-gray-100 text-slate-400 border-gray-100' : 'bg-[#e9f3fb] text-[#4f7ca0] border-[#ced6df]'}`}
-                              >
-                                {safeStr(place.name)}
-                              </button>
-                            );
-                          })}
-                      </div>
+            <div className="flex-1 overflow-hidden">
+              <div className="flex flex-col h-full border border-slate-200 rounded-xl overflow-hidden mx-4 my-4 bg-slate-50">
+                <div className="relative h-[35%] min-h-[220px] bg-slate-200 shrink-0">
+                  <RealMap places={tripPlaces} isRoute={true} mapStatus={mapStatus} currentCity={currentCity} lockViewport={lockMapViewport} mapView={routeMapView} onMapViewChange={setRouteMapView} routeModes={segmentModes} />
+                </div>
+                <div className="flex-1 flex flex-col relative bg-white rounded-t-[32px] -mt-8 z-20 shadow-[0_-20px_50px_rgba(0,0,0,0.08)] overflow-hidden">
+                  <div className="px-8 pt-8 pb-4 flex items-center justify-between shrink-0">
+                    <button onClick={() => setCurrentRouteDay((d) => Math.max(1, d - 1))} className={`p-2 rounded-full ${currentRouteDay === 1 ? 'opacity-10 pointer-events-none' : 'text-slate-400 hover:bg-slate-100'}`}><ChevronLeft size={24} /></button>
+                    <div className="text-center">
+                      <span className="block text-[10px] font-black tracking-[0.3em] mb-1 uppercase" style={{ color: COLORS.primary }}>Route Planner</span>
+                      <h2 className="font-black text-2xl text-slate-800">Day {currentRouteDay}</h2>
                     </div>
-                    <div className="mb-5 bg-white border border-[#e9e7e3] rounded-2xl p-4">
-                      <div className="flex items-center justify-between mb-3">
-                        <h3 className="font-bold text-slate-700 text-sm">时间轴（可调起始时间）</h3>
-                        <div className="flex items-center gap-2">
-                          <label className="text-[11px] text-slate-500 flex items-center gap-1">
-                            <input type="checkbox" checked={lockMapViewport} onChange={(event) => setLockMapViewport(event.target.checked)} />
-                            锁定地图缩放({Number(mapView?.zoom || 11).toFixed(1)}x)
-                          </label>
-                          <input
-                            type="time"
-                            value={dayStartAt}
-                            onChange={(event) => setDayStartAt(event.target.value)}
-                            className="px-2 py-1.5 rounded-lg bg-[#f4eeeb] text-xs font-semibold text-slate-600 outline-none"
-                          />
-                        </div>
-                      </div>
-                      <div className="mb-3 flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-2">
-                          <span className="text-[11px] text-slate-500">天数</span>
-                          <select
-                            value={routeDayCount}
-                            onChange={(event) => {
-                              const nextDays = Math.max(1, Number(event.target.value) || 1);
-                              setRouteDayCount(nextDays);
-                              setCurrentRouteDay((prev) => Math.min(prev, nextDays));
-                              const placesPerDay = Math.max(1, Math.ceil((timelineRows.length || 1) / nextDays));
-                              setStayMinutesByPlace((prev) => {
-                                const next = { ...prev };
-                                timelineRows.forEach((row, index) => {
-                                  next[`day_${row.place.id}`] = Math.min(nextDays, Math.floor(index / placesPerDay) + 1);
-                                });
-                                return next;
-                              });
-                            }}
-                            className="text-[11px] px-2 py-1 rounded bg-white border border-[#e9e7e3]"
-                          >
-                            {[1,2,3,4,5,6,7].map((d) => <option key={`day_count_${d}`} value={d}>{d}天</option>)}
-                          </select>
-                        </div>
-                        <div className="text-sm font-bold text-slate-700">DAY {currentRouteDay}</div>
-                        <select
-                          value={currentRouteDay}
-                          onChange={(event) => setCurrentRouteDay(Math.max(1, Math.min(totalDays, Number(event.target.value) || 1)))}
-                          className="text-[11px] px-2 py-1 rounded bg-white border border-[#e9e7e3]"
-                        >
-                          {dayOptions.map((d) => <option key={`pick_day_${d}`} value={d}>DAY {d}</option>)}
-                        </select>
-                      </div>
-                      <div className="space-y-2 max-h-56 overflow-y-auto">
-                        {currentDayRows.map((row) => (
-                          <div key={`timeline_${row.id}`} className="flex items-center justify-between text-xs bg-[#f9f7f2] rounded-xl px-3 py-2">
-                            <div className="min-w-0 pr-2">
-                              <div className="font-bold text-slate-700 truncate flex items-center gap-1">
-                                <span>{safeStr(row.place.name)}</span>
-                                <select
-                                  value={Number(stayMinutesByPlace[`day_${row.place.id}`] || 1)}
-                                  onChange={(event) => {
-                                    const nextDay = Math.max(1, Math.min(totalDays, Number(event.target.value) || 1));
-                                    setStayMinutesByPlace((prev) => ({ ...prev, [`day_${row.place.id}`]: nextDay }));
-                                  }}
-                                  className="px-1 py-0.5 rounded bg-white border border-[#e9e7e3] text-[10px]"
-                                >
-                                  {dayOptions.map((d) => <option key={`d_${row.id}_${d}`} value={d}>DAY {d}</option>)}
-                                </select>
-                                <select
-                                  value={segmentModes[Math.max(0, timelineRows.findIndex((item) => item.id === row.id) - 1)] || 'driving'}
-                                  onChange={(event) => {
-                                    const idx = timelineRows.findIndex((item) => item.id === row.id) - 1;
-                                    if (idx >= 0) handleSegmentModeChange(idx, event.target.value);
-                                  }}
-                                  className="px-1 py-0.5 rounded bg-white border border-[#e9e7e3] text-[10px]"
-                                >
-                                  <option value="driving">驾车</option>
-                                  <option value="transit">公交</option>
-                                  <option value="riding">骑行</option>
-                                  <option value="walking">步行</option>
-                                </select>
-                              </div>
-                              <div className="text-[10px] text-slate-500 mt-0.5 flex items-center gap-1">
-                                <MapPin size={10} />
-                                <span className="truncate max-w-[240px]">{normalizeAddressText(row.place)}</span>
-                              </div>
-                              <div className="text-[10px] text-slate-500 mt-0.5 flex items-center gap-1">
-                                <span>停留</span>
-                                <input
-                                  type="number"
-                                  min={15}
-                                  step={5}
-                                  value={Number(stayMinutesByPlace[row.place.id]) || row.stayMinutes}
-                                  onChange={(event) => {
-                                    const value = Math.max(15, Number(event.target.value) || 15);
-                                    setStayMinutesByPlace((prev) => ({ ...prev, [row.place.id]: value }));
-                                  }}
-                                  className="w-16 px-1 py-0.5 rounded bg-white border border-[#e9e7e3] text-slate-600"
-                                />
-                                <span>分钟</span>
-                              </div>
-                              {(() => {
-                                const rowIndex = timelineRows.findIndex((item) => item.id === row.id);
-                                if (rowIndex < 0 || rowIndex >= timelineRows.length - 1) return null;
-                                const seg = segmentRoutes[rowIndex];
-                                return seg ? (
-                                  <div className="mt-1 text-[10px] text-blue-600 font-semibold">
-                                    {(segmentModes[rowIndex] || 'driving') === 'transit' ? '公交' : (segmentModes[rowIndex] || 'driving') === 'walking' ? '步行' : (segmentModes[rowIndex] || 'driving') === 'riding' ? '骑行' : '驾车'} · {(seg.distance / 1000).toFixed(1)}公里 · {Math.round(seg.time / 60)}分钟
+                    <button onClick={() => setCurrentRouteDay((d) => Math.min(totalDays, d + 1))} className={`p-2 rounded-full ${currentRouteDay === totalDays ? 'opacity-10 pointer-events-none' : 'text-slate-400 hover:bg-slate-100'}`}><ChevronRight size={24} /></button>
+                  </div>
+                  <main className="flex-1 overflow-y-auto px-6 pt-2 pb-24 hide-scrollbar">
+                    <div className="space-y-5">
+                      {currentDayRows.map((row) => {
+                        const rowIndex = timelineRows.findIndex((item) => item.id === row.id);
+                        const segMode = segmentModes[Math.max(0, rowIndex - 1)] || 'driving';
+                        return (
+                          <div key={`timeline_${row.id}`} className="group bg-white rounded-[28px] p-5 border border-slate-100 shadow-sm hover:shadow-lg transition-all relative">
+                            <div className="flex justify-between items-start gap-3">
+                              <div className="flex gap-4 min-w-0">
+                                <div className="p-3 rounded-2xl shrink-0 text-white" style={{ backgroundColor: COLORS.primary }}><MapPin size={18} /></div>
+                                <div className="flex flex-col gap-1 min-w-0">
+                                  <h3 className="font-bold text-slate-800 text-lg truncate">{safeStr(row.place.name)}</h3>
+                                  <div className="text-[11px] text-slate-400 truncate">{normalizeAddressText(row.place)}</div>
+                                  <div className="flex items-center flex-wrap gap-2 text-slate-400 mt-1">
+                                    <div className="flex items-center gap-1">
+                                      <Clock size={14} />
+                                      <span className="text-[11px]">??</span>
+                                      <input type="number" min={15} step={5} value={Number(stayMinutesByPlace[row.place.id]) || row.stayMinutes} onChange={(event) => setStayMinutesByPlace((prev) => ({ ...prev, [row.place.id]: Math.max(15, Number(event.target.value) || 15) }))} className="w-16 bg-slate-50 text-slate-700 font-bold outline-none text-[11px] px-1 rounded border border-slate-200" />
+                                      <span className="text-[11px]">??</span>
+                                    </div>
                                   </div>
-                                ) : null;
-                              })()}
+                                </div>
+                              </div>
+                              <div className="w-24 shrink-0">
+                                <select value={Number(stayMinutesByPlace[`day_${row.place.id}`] || currentRouteDay)} onChange={(event) => setStayMinutesByPlace((prev) => ({ ...prev, [`day_${row.place.id}`]: Math.max(1, Math.min(totalDays, Number(event.target.value) || 1)) }))} className="mb-2 w-full px-2 py-1 rounded-xl border border-slate-200 text-xs font-bold bg-white">
+                                  {dayOptions.map((d) => <option key={`d_${row.id}_${d}`} value={d}>D{d}</option>)}
+                                </select>
+                                <select value={segMode} onChange={(event) => { if (rowIndex > 0) handleSegmentModeChange(rowIndex - 1, event.target.value); }} className="w-full px-2 py-1 rounded-xl border border-slate-200 text-xs font-bold bg-white">
+                                  <option value="driving">??</option>
+                                  <option value="transit">??</option>
+                                  <option value="riding">??</option>
+                                  <option value="walking">??</option>
+                                </select>
+                              </div>
                             </div>
-                            <div className="text-right text-slate-600 shrink-0">
-                              <p>{row.arriveAt} 到达</p>
-                              <p className="text-[10px] text-slate-500">{row.leaveAt} 离开</p>
+                            <div className="flex items-center justify-between mt-5 pt-4 border-t border-dashed border-slate-100">
+                              <div className="flex flex-col"><span className="text-[9px] text-slate-400 font-black uppercase">Arrival</span><span className="text-sm font-black text-slate-700">{row.arriveAt}</span></div>
+                              <div className="flex-1 mx-6 h-1 bg-slate-50 rounded-full relative"><div className="absolute top-0 left-0 h-full w-1/3 rounded-full" style={{ backgroundColor: COLORS.light }}></div></div>
+                              <div className="flex flex-col text-right"><span className="text-[9px] text-slate-400 font-black uppercase">Departure</span><span className="text-sm font-black text-slate-700">{row.leaveAt}</span></div>
                             </div>
                           </div>
-                        ))}
-                      </div>
+                        );
+                      })}
                     </div>
-
-                    {segmentRoutes.length > 0 && !isCalculatingSegments && (
-                      <div className="mt-6 p-4 bg-white rounded-2xl shadow-sm border border-blue-50">
-                         <div className="flex items-center gap-2 mb-4 overflow-x-auto hide-scrollbar pb-1">
-                            <span className="text-[11px] font-bold text-slate-400 shrink-0">批量设置:</span>
-                            <button onClick={() => setAllSegmentModes('driving')} className="shrink-0 px-3 py-1.5 rounded-full text-xs font-bold transition-all bg-gray-50 text-slate-500 border border-gray-100 active:scale-95">🚗 驾车</button>
-                            <button onClick={() => setAllSegmentModes('transit')} className="shrink-0 px-3 py-1.5 rounded-full text-xs font-bold transition-all bg-gray-50 text-slate-500 border border-gray-100 active:scale-95">🚌 公交</button>
-                            <button onClick={() => setAllSegmentModes('riding')} className="shrink-0 px-3 py-1.5 rounded-full text-xs font-bold transition-all bg-gray-50 text-slate-500 border border-gray-100 active:scale-95">🚴 骑行</button>
-                            <button onClick={() => setAllSegmentModes('walking')} className="shrink-0 px-3 py-1.5 rounded-full text-xs font-bold transition-all bg-gray-50 text-slate-500 border border-gray-100 active:scale-95">🚶‍♂️ 步行</button>
-                         </div>
-                         <div className="flex items-center gap-2 mb-3">
-                            <Navigation size={16} className="text-blue-600" />
-                            <span className="font-bold text-sm text-blue-600">总计行程评估</span>
-                         </div>
-                         <div className="flex justify-between items-center text-slate-600 bg-gray-50 rounded-xl p-3">
-                            <div>
-                               <p className="text-[10px] text-slate-400 mb-0.5">总计路程</p>
-                               <p className="font-black text-lg">{(totalDist / 1000).toFixed(1)} <span className="text-xs font-medium text-slate-500">公里</span></p>
-                            </div>
-                            <div className="h-8 w-px bg-gray-200"></div>
-                            <div className="text-right">
-                               <p className="text-[10px] text-slate-400 mb-0.5">预估总时长</p>
-                               <p className="font-black text-lg text-blue-500">
-                                  {Math.round(totalTime / 60)} <span className="text-xs font-medium text-slate-500">分钟</span>
-                               </p>
-                            </div>
-                         </div>
-                      </div>
-                    )}
-                 </div>
+                  </main>
+                  <div className="px-6 py-6 bg-white/80 backdrop-blur-md border-t border-slate-50 text-center shrink-0">
+                    <div className="flex justify-center gap-2.5 mb-2">
+                      {dayOptions.map((d) => (
+                        <div key={`page_${d}`} onClick={() => setCurrentRouteDay(d)} className={`h-1.5 rounded-full transition-all duration-500 cursor-pointer ${currentRouteDay === d ? 'w-10 shadow-lg' : 'w-1.5 bg-slate-200'}`} style={currentRouteDay === d ? { backgroundColor: COLORS.primary } : {}} />
+                      ))}
+                    </div>
+                    <p className="text-[10px] text-slate-300 font-black uppercase tracking-[0.4em]">Slide to explore</p>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
         )}
 
-        {/* 备忘录常用模板设置弹窗 */}
         {showMemoTemplateModal && (
           <div className="fixed inset-0 z-[160] flex items-center justify-center bg-black/40 backdrop-blur-sm p-6 animate-in fade-in">
             <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[80vh]">
