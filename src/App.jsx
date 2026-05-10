@@ -1883,7 +1883,7 @@ export default function App() {
         {showRoutePanel && activeTripId && (
           <div className="fixed inset-0 z-[120] flex flex-col bg-slate-50 min-h-0">
             <div className="px-6 py-5 flex items-center justify-between border-b border-slate-100 shrink-0 bg-white">
-              <h2 className="text-2xl font-black text-slate-800">???????</h2>
+              <h2 className="text-2xl font-black text-slate-800">行程规划与地图</h2>
               <button onClick={() => setShowRoutePanel(false)} className="p-2 rounded-full bg-slate-100"><X size={20} /></button>
             </div>
             <div className="flex-1 overflow-hidden">
@@ -1916,9 +1916,9 @@ export default function App() {
                                   <div className="flex items-center flex-wrap gap-2 text-slate-400 mt-1">
                                     <div className="flex items-center gap-1">
                                       <Clock size={14} />
-                                      <span className="text-[11px]">??</span>
+                                      <span className="text-[11px]">停留</span>
                                       <input type="number" min={15} step={5} value={Number(stayMinutesByPlace[row.place.id]) || row.stayMinutes} onChange={(event) => setStayMinutesByPlace((prev) => ({ ...prev, [row.place.id]: Math.max(15, Number(event.target.value) || 15) }))} className="w-16 bg-slate-50 text-slate-700 font-bold outline-none text-[11px] px-1 rounded border border-slate-200" />
-                                      <span className="text-[11px]">??</span>
+                                      <span className="text-[11px]">分钟</span>
                                     </div>
                                   </div>
                                 </div>
@@ -1928,10 +1928,10 @@ export default function App() {
                                   {dayOptions.map((d) => <option key={`d_${row.id}_${d}`} value={d}>D{d}</option>)}
                                 </select>
                                 <select value={segMode} onChange={(event) => { if (rowIndex > 0) handleSegmentModeChange(rowIndex - 1, event.target.value); }} className="w-full px-2 py-1 rounded-xl border border-slate-200 text-xs font-bold bg-white">
-                                  <option value="driving">??</option>
-                                  <option value="transit">??</option>
-                                  <option value="riding">??</option>
-                                  <option value="walking">??</option>
+                                  <option value="driving">驾车</option>
+                                  <option value="transit">公交</option>
+                                  <option value="riding">骑行</option>
+                                  <option value="walking">步行</option>
                                 </select>
                               </div>
                             </div>
