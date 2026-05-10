@@ -337,6 +337,8 @@ export default function App() {
   const [aiConversation, setAiConversation] = useState([]);
   const [aiProposal, setAiProposal] = useState(null);
   const [aiDraftTrips, setAiDraftTrips] = useState([]);
+  const [aiDraftStayMinutesByPlace, setAiDraftStayMinutesByPlace] = useState({});
+  const [aiDraftDayMode, setAiDraftDayMode] = useState({});
   const [dayStartAt, setDayStartAt] = useState(localStorage.getItem('travel_day_start_at') || '10:00');
 
   const [favSearchQuery, setFavSearchQuery] = useState('');
@@ -845,6 +847,8 @@ export default function App() {
       .slice(0, 5);
     setAiProposal({ trips: proposalTrips, summary: safeStr(parsed?.summary), goodieBag: safeGoodieBag });
     setAiDraftTrips(proposalTrips);
+    setAiDraftStayMinutesByPlace({});
+    setAiDraftDayMode({});
     setAiConversation((prev) => [...prev, { role: 'assistant', text: safeStr(parsed?.summary) || `已生成 ${proposalTrips.length} 条可执行路线，确认后可一键加入。` }]);
     setIsSmartPlanning(false);
     aiRequestingRef.current = false;
@@ -1002,6 +1006,37 @@ export default function App() {
       } catch(e) { logCloudError('Sync trip places after remove place', e); }
     }
   };
+
+  const moveDraftPlace = (fromTripIndex, placeIndex, toTripIndex) => {
+    if (fromTripIndex === toTripIndex) return;
+    setAiDraftTrips((prev) => {
+      if (!prev[fromTripIndex] || !prev[toTripIndex]) return prev;
+      const next = prev.map((trip) => ({ ...trip, places: [...trip.places] }));
+      const [moved] = next[fromTripIndex].places.splice(placeIndex, 1);
+      if (!moved) return prev;
+      if (!next[toTripIndex].places.includes(moved)) {
+        next[toTripIndex].places.push(moved);
+      }
+      return next.filter((trip) => trip.places.length > 0);
+    });
+  };
+
+  const addDraftDay = () => {
+    setAiDraftTrips((prev) => [
+      ...prev,
+      { id: `trip_${Date.now()}_${prev.length}`, name: `Day ${prev.length + 1}`, places: [] },
+    ]);
+  };
+
+  const removeDraftDay = (dayIndex) => {
+    setAiDraftTrips((prev) => {
+      if (prev.length <= 1) return prev;
+      const next = prev.filter((_, idx) => idx !== dayIndex);
+      return next.map((trip, idx) => ({ ...trip, name: `Day ${idx + 1}` }));
+    });
+  };
+
+  const getPlaceById = (pid) => savedPlaces.find((p) => p.id === pid);
 
   const resolveAddressForPlace = async (placeData) => {
     const location = getLngLat(placeData?.location);
@@ -1894,27 +1929,96 @@ export default function App() {
                   <div className="bg-white border border-[#ced6df] rounded-2xl p-4">
                     <p className="text-sm font-bold text-slate-700 mb-2">提案预览</p>
                     <p className="text-xs text-slate-500 mb-3">{aiProposal.summary || '已生成可执行行程提案。'}</p>
-                    <div className="space-y-2 mb-3">
-                      {aiDraftTrips.map((trip, tripIndex) => (
-                        <div key={trip.id} className="text-xs bg-[#f9f7f2] rounded-xl px-3 py-2 text-slate-600">
-                          <div className="flex items-center justify-between gap-2">
-                            <span>{trip.name} · {trip.places.length} 个节点</span>
-                            <button
-                              onClick={() => {
-                                if (tripIndex === 0) return;
-                                setAiDraftTrips((prev) => {
-                                  const next = [...prev];
-                                  [next[tripIndex - 1], next[tripIndex]] = [next[tripIndex], next[tripIndex - 1]];
-                                  return next;
-                                });
-                              }}
-                              className="text-[10px] px-2 py-1 rounded bg-white border border-[#ced6df]"
-                            >
-                              前移一天
-                            </button>
+                    <div className="mb-3 flex items-center justify-between">
+                      <p className="text-xs font-bold text-slate-600">多天同屏编辑</p>
+                      <div className="flex items-center gap-2">
+                        <button onClick={addDraftDay} className="text-[10px] px-2 py-1 rounded bg-blue-50 text-blue-600 border border-blue-100">+ 增加天数</button>
+                      </div>
+                    </div>
+                    <div className="mb-3 overflow-x-auto hide-scrollbar">
+                      <div className="flex gap-3 min-w-max pb-1">
+                        {aiDraftTrips.map((trip, tripIndex) => (
+                          <div key={trip.id} className="w-[260px] bg-[#f9f7f2] rounded-xl border border-[#e9e7e3] p-3">
+                            <div className="flex items-center justify-between mb-2">
+                              <p className="text-xs font-bold text-slate-700">{`Day ${tripIndex + 1}`}</p>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => {
+                                    if (tripIndex === 0) return;
+                                    setAiDraftTrips((prev) => {
+                                      const next = [...prev];
+                                      [next[tripIndex - 1], next[tripIndex]] = [next[tripIndex], next[tripIndex - 1]];
+                                      return next;
+                                    });
+                                  }}
+                                  className="text-[10px] px-2 py-1 rounded bg-white border border-[#ced6df]"
+                                >
+                                  ←
+                                </button>
+                                <button
+                                  onClick={() => removeDraftDay(tripIndex)}
+                                  className="text-[10px] px-2 py-1 rounded bg-red-50 text-red-500 border border-red-100"
+                                >
+                                  删天
+                                </button>
+                              </div>
+                            </div>
+                            <div className="mb-2">
+                              <label className="text-[10px] text-slate-500">默认交通</label>
+                              <select
+                                value={aiDraftDayMode[trip.id] || 'driving'}
+                                onChange={(e) => setAiDraftDayMode((prev) => ({ ...prev, [trip.id]: e.target.value }))}
+                                className="w-full mt-1 px-2 py-1 rounded-lg bg-white border border-[#ced6df] text-xs"
+                              >
+                                <option value="driving">驾车</option>
+                                <option value="transit">公交地铁</option>
+                                <option value="riding">骑行</option>
+                                <option value="walking">步行</option>
+                              </select>
+                            </div>
+                            <div className="space-y-2 max-h-64 overflow-y-auto">
+                              {trip.places.length === 0 ? <p className="text-[11px] text-slate-400">当前天暂无地点</p> : null}
+                              {trip.places.map((pid, placeIndex) => {
+                                const place = getPlaceById(pid);
+                                if (!place) return null;
+                                return (
+                                  <div key={`${trip.id}_${pid}_${placeIndex}`} className="bg-white rounded-lg border border-[#e9e7e3] p-2">
+                                    <p className="text-xs font-semibold text-slate-700 truncate">{safeStr(place.name)}</p>
+                                    <p className="text-[10px] text-slate-500 truncate mt-0.5">{safeStr(place.address) || safeStr(place.district) || '地址待补全'}</p>
+                                    <div className="mt-1.5 flex items-center gap-1">
+                                      <label className="text-[10px] text-slate-500">停留</label>
+                                      <input
+                                        type="number"
+                                        min={15}
+                                        step={5}
+                                        value={Number(aiDraftStayMinutesByPlace[pid]) || estimateStayMinutes(place)}
+                                        onChange={(e) => {
+                                          const v = Math.max(15, Number(e.target.value) || 15);
+                                          setAiDraftStayMinutesByPlace((prev) => ({ ...prev, [pid]: v }));
+                                        }}
+                                        className="w-14 px-1 py-0.5 rounded border border-[#ced6df] text-[10px]"
+                                      />
+                                      <span className="text-[10px] text-slate-500">分钟</span>
+                                    </div>
+                                    <div className="mt-1.5 flex items-center gap-1 flex-wrap">
+                                      {aiDraftTrips.map((_, targetDayIndex) => (
+                                        <button
+                                          key={`move_${trip.id}_${pid}_${targetDayIndex}`}
+                                          onClick={() => moveDraftPlace(tripIndex, placeIndex, targetDayIndex)}
+                                          className={`text-[10px] px-1.5 py-0.5 rounded border ${targetDayIndex === tripIndex ? 'bg-gray-100 text-slate-400 border-gray-100' : 'bg-blue-50 text-blue-600 border-blue-100'}`}
+                                          disabled={targetDayIndex === tripIndex}
+                                        >
+                                          到D{targetDayIndex + 1}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        ))}
+                      </div>
                     </div>
                     {aiProposal.goodieBag?.length > 0 ? (
                       <div className="mb-3">
@@ -1944,6 +2048,12 @@ export default function App() {
                           }
                         } else {
                           await applyProposedTrips(aiDraftTrips);
+                        }
+                        setStayMinutesByPlace((prev) => ({ ...prev, ...aiDraftStayMinutesByPlace }));
+                        if (aiDraftTrips.length > 0) {
+                          const firstId = aiDraftTrips[0].id;
+                          const firstMode = aiDraftDayMode[firstId] || 'driving';
+                          setSegmentModes(new Array(Math.max(0, (aiDraftTrips[0].places?.length || 0) - 1)).fill(firstMode));
                         }
                         if (failedGoodieCount > 0) {
                           alert(`有 ${failedGoodieCount} 个福袋地点未能在高德解析，已跳过，不影响主行程。`);
