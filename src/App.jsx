@@ -56,6 +56,7 @@ const SUPABASE_CONFIG = {
 };
 
 const AI_PLAN_API_URL = import.meta.env.VITE_AI_PLAN_API_URL || '';
+const AI_PLAN_BEARER_TOKEN = import.meta.env.VITE_AI_PLAN_BEARER_TOKEN || '';
 
 const COLORS = {
   white: '#FFFFFF',
@@ -140,6 +141,22 @@ const getLngLat = (loc) => {
   return null;
 };
 
+const normalizeAddressText = (placeData) => {
+  const address = safeStr(placeData?.address).trim();
+  const district = safeStr(placeData?.district).trim();
+  if (address && address !== '地图标记地点') return district ? `${district} ${address}` : address;
+  if (district) return district;
+  return '地址待补全';
+};
+
+const placeIdentityKey = (placeData, fallbackCity = '') => {
+  const city = inferCityName(placeData, fallbackCity);
+  const name = safeStr(placeData?.name).replace(/\s+/g, '').toLowerCase();
+  const coords = getLngLat(placeData?.location);
+  if (coords) return `${city}::${name}::${coords[0].toFixed(5)}::${coords[1].toFixed(5)}`;
+  return `${city}::${name}`;
+};
+
 // ==========================================
 // 地图核心组件
 // ==========================================
@@ -217,28 +234,16 @@ const RealMap = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, current
 
         if (isRoute && places.length >= 2) {
           const path = places.map(p => getLngLat(p.location)).filter(Boolean);
-
           if (path.length >= 2) {
-            path.forEach((start, i) => {
-              if (i === path.length - 1) return;
-              const end = path[i+1];
-              let searcher;
-              const currentMode = routeModes[i] || 'driving';
-
-              if (currentMode === 'walking' && window.AMap.Walking) searcher = new window.AMap.Walking({ map, hideMarkers: true });
-              else if (currentMode === 'riding' && window.AMap.Riding) searcher = new window.AMap.Riding({ map, hideMarkers: true });
-              else if (currentMode === 'transit' && window.AMap.Transfer) {
-                const safeCity = currentCity === '全国' ? '北京' : currentCity;
-                searcher = new window.AMap.Transfer({ map, hideMarkers: true, city: safeCity });
-              }
-              else if (currentMode === 'driving' && window.AMap.Driving) {
-                searcher = new window.AMap.Driving({ map, hideMarkers: true });
-              }
-              
-              if (searcher) {
-                try { searcher.search(start, end); } catch(err) { console.error('Route error:', err); }
-              }
+            const polyline = new window.AMap.Polyline({
+              path,
+              strokeColor: '#95C2E2',
+              strokeWeight: 6,
+              strokeOpacity: 0.9,
+              lineJoin: 'round',
+              lineCap: 'round',
             });
+            map.add(polyline);
           }
         } else if (places.length > 0 && !isRoute && !lockViewport) {
           map.setFitView();
@@ -356,6 +361,15 @@ export default function App() {
     }
     return { zoom: 11, center: null };
   });
+  const [routeMapView, setRouteMapView] = useState(() => {
+    try {
+      const local = JSON.parse(localStorage.getItem('travel_route_map_view') || '{}');
+      if (typeof local.zoom === 'number' && Array.isArray(local.center) && local.center.length === 2) return local;
+    } catch {
+      return { zoom: 11, center: null };
+    }
+    return { zoom: 11, center: null };
+  });
   const [collapsedCities, setCollapsedCities] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('travel_collapsed_cities') || '{}');
@@ -375,7 +389,21 @@ export default function App() {
   useEffect(() => { localStorage.setItem('travel_memo_template', JSON.stringify(memoTemplate)); }, [memoTemplate]);
   useEffect(() => { localStorage.setItem('travel_day_start_at', dayStartAt); }, [dayStartAt]);
   useEffect(() => { localStorage.setItem('travel_map_view', JSON.stringify(mapView)); }, [mapView]);
+  useEffect(() => { localStorage.setItem('travel_route_map_view', JSON.stringify(routeMapView)); }, [routeMapView]);
   useEffect(() => { localStorage.setItem('travel_collapsed_cities', JSON.stringify(collapsedCities)); }, [collapsedCities]);
+
+  useEffect(() => {
+    setSavedPlaces((prev) => {
+      const map = new Map();
+      prev.forEach((item) => {
+        map.set(placeIdentityKey(item, safeStr(item.city) || currentCity), {
+          ...item,
+          address: normalizeAddressText(item),
+        });
+      });
+      return Array.from(map.values()).sort((a, b) => Number(b.savedAt || 0) - Number(a.savedAt || 0));
+    });
+  }, [currentCity]);
 
   // --- 云端数据同步 ---
   useEffect(() => {
@@ -491,10 +519,41 @@ export default function App() {
 
         try {
           autoComplete.current.search(searchQuery, (status, result) => {
-            if (status === 'complete' && result?.tips) {
-              setSearchResults(result.tips.filter(item => item && item.location));
-            } else {
-              setSearchResults([]);
+            const tips = status === 'complete' && result?.tips ? result.tips.filter(item => item && (item.location || item.address || item.district)) : [];
+            if (!window.AMap?.PlaceSearch) {
+              setSearchResults(tips);
+              return;
+            }
+            try {
+              const placeSearch = new window.AMap.PlaceSearch({
+                city: currentCity === '全国' ? '全国' : currentCity,
+                citylimit: false,
+                pageSize: 20,
+                extensions: 'all',
+              });
+              placeSearch.search(searchQuery, (s2, r2) => {
+                const pois = s2 === 'complete' ? (r2?.poiList?.pois || []) : [];
+                const enriched = pois.map((poi) => ({
+                  id: safeStr(poi.id) || `${safeStr(poi.name)}_${safeStr(poi.location?.lng)}_${safeStr(poi.location?.lat)}`,
+                  name: safeStr(poi.name),
+                  address: safeStr(poi.address),
+                  district: `${safeStr(poi.pname)}${safeStr(poi.cityname)}${safeStr(poi.adname)}`,
+                  category: safeStr(poi.type),
+                  location: poi.location ? { lng: poi.location.lng, lat: poi.location.lat } : null,
+                  city: safeStr(poi.cityname),
+                }));
+                const merged = [...tips, ...enriched];
+                const seen = new Set();
+                const unique = merged.filter((item) => {
+                  const key = `${safeStr(item.name)}|${safeStr(item.address)}|${safeStr(item.location?.lng)}|${safeStr(item.location?.lat)}`;
+                  if (seen.has(key)) return false;
+                  seen.add(key);
+                  return true;
+                });
+                setSearchResults(unique.slice(0, 40));
+              });
+            } catch {
+              setSearchResults(tips);
             }
           });
         } catch(e) {
@@ -521,6 +580,7 @@ export default function App() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...(AI_PLAN_BEARER_TOKEN ? { Authorization: `Bearer ${AI_PLAN_BEARER_TOKEN}` } : {}),
         },
         body: JSON.stringify(payload)
       });
@@ -568,9 +628,16 @@ export default function App() {
   const validatePlanPayload = (payload, cityPlaces) => {
     if (!payload || !Array.isArray(payload.routes)) return { ok: false, reason: 'AI 未返回 routes 数组' };
     const validIds = new Set(cityPlaces.map((place) => place.id));
+    const usedIds = new Set();
     const safeRoutes = payload.routes.map((route, index) => {
       const title = safeStr(route?.title) || `Day ${index + 1}`;
-      const placeIds = Array.isArray(route?.placeIds) ? route.placeIds.filter((id) => validIds.has(id)) : [];
+      const placeIds = Array.isArray(route?.placeIds)
+        ? route.placeIds.filter((id) => validIds.has(id)).filter((id) => {
+            if (usedIds.has(id)) return false;
+            usedIds.add(id);
+            return true;
+          })
+        : [];
       return { title, placeIds };
     }).filter((route) => route.placeIds.length > 0);
     if (!safeRoutes.length) return { ok: false, reason: 'AI 路线不包含有效收藏地点' };
@@ -849,24 +916,22 @@ export default function App() {
   // ==========================================
   const handleSavePlace = async (placeData, stayOpen = false) => {
     const placeName = safeStr(placeData.name) || '未知地点';
-    const normalizedAddress = safeStr(placeData.address) && safeStr(placeData.address) !== '地图标记地点'
-      ? safeStr(placeData.address)
-      : (safeStr(placeData.district) || '');
-    const dedupeKey = `${currentCity}::${placeName}`;
-    const existingByName = savedPlaces.find((place) => `${place.city}::${safeStr(place.name)}` === dedupeKey);
+    const inferredCity = inferCityName(placeData, currentCity);
+    const dedupeKey = placeIdentityKey(placeData, currentCity);
+    const existingByKey = savedPlaces.find((place) => placeIdentityKey(place, inferredCity) === dedupeKey);
     const newPlace = {
-      id: placeData.id || existingByName?.id || Date.now().toString(),
+      id: existingByKey?.id || placeData.id || Date.now().toString(),
       name: placeName,
       location: placeData.location,
       category: safeStr(placeData.category) || '景点',
-      address: normalizedAddress,
-      district: safeStr(placeData.district) || '',
-      city: inferCityName(placeData, currentCity), 
+      address: normalizeAddressText(placeData),
+      district: safeStr(placeData.district) || safeStr(existingByKey?.district) || '',
+      city: inferredCity,
       savedAt: Date.now()
     };
     setSavedPlaces(prev => {
-      const exists = prev.find(p => p.id === newPlace.id || (p.city === newPlace.city && safeStr(p.name) === newPlace.name));
-      return exists ? prev.map(p => (p.id === exists.id ? { ...exists, ...newPlace } : p)) : [newPlace, ...prev];
+      const filtered = prev.filter((p) => placeIdentityKey(p, newPlace.city) !== dedupeKey && p.id !== newPlace.id);
+      return [newPlace, ...filtered];
     });
 
     if (user && !user.is_anonymous && supabase) {
@@ -881,8 +946,16 @@ export default function App() {
 
   const removePlace = async (id) => {
     setSavedPlaces(prev => prev.filter(p => p.id !== id));
+    setTrips(prev => prev.map((trip) => ({ ...trip, places: (trip.places || []).filter((pid) => pid !== id) })));
     if (user && !user.is_anonymous && supabase) {
       try { await supabase.from('places').delete().eq('id', id); } catch(e){ logCloudError('Remove place', e); }
+      try {
+        const impacted = trips.filter((trip) => (trip.places || []).includes(id));
+        for (const trip of impacted) {
+          const nextPlaces = (trip.places || []).filter((pid) => pid !== id);
+          await supabase.from('trips').update({ places: nextPlaces }).eq('id', trip.id);
+        }
+      } catch(e) { logCloudError('Sync trip places after remove place', e); }
     }
   };
 
@@ -894,7 +967,13 @@ export default function App() {
   };
 
   const removeTrip = async (id) => {
-    setTrips(prev => prev.filter(t => t.id !== id));
+    const nextTrips = trips.filter(t => t.id !== id);
+    setTrips(nextTrips);
+    if (activeTripId === id) {
+      const fallbackId = nextTrips[0]?.id || null;
+      setActiveTripId(fallbackId);
+      setShowRoutePanel(Boolean(fallbackId));
+    }
     if (user && !user.is_anonymous && supabase) {
       try { await supabase.from('trips').delete().eq('id', id); } catch(e){ logCloudError('Remove trip', e); }
     }
@@ -937,6 +1016,27 @@ export default function App() {
 
     if (user && !user.is_anonymous && supabase && updatedPlaces.length > 0) {
       try { await supabase.from('trips').update({ places: updatedPlaces }).eq('id', activeTripId); } catch(e){ logCloudError('Reorder trip places', e); }
+    }
+  };
+
+  const removePlaceFromActiveTrip = async (index) => {
+    if (!activeTripId) return;
+    let updatedPlaces = [];
+    setTrips((prevTrips) => prevTrips.map((trip) => {
+      if (trip.id !== activeTripId) return trip;
+      const nextPlaces = [...(trip.places || [])];
+      if (index < 0 || index >= nextPlaces.length) return trip;
+      nextPlaces.splice(index, 1);
+      updatedPlaces = nextPlaces;
+      return { ...trip, places: nextPlaces };
+    }));
+
+    if (updatedPlaces.length === 0) {
+      setShowRoutePanel(false);
+    }
+
+    if (user && !user.is_anonymous && supabase) {
+      try { await supabase.from('trips').update({ places: updatedPlaces }).eq('id', activeTripId); } catch(e){ logCloudError('Remove place from trip', e); }
     }
   };
 
@@ -1269,14 +1369,15 @@ export default function App() {
                         输入地点名称开始搜索
                       </div>
                     ) : searchResults.length > 0 ? (
-                      searchResults.map(p => {
-                        const isSaved = savedPlaces.some(saved => saved.id === p.id);
+                      searchResults.map((p, index) => {
+                        const key = placeIdentityKey(p, currentCity);
+                        const isSaved = savedPlaces.some((saved) => placeIdentityKey(saved, currentCity) === key);
                         return (
-                          <div key={p.id} onClick={() => setSelectedPlace(p)} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-50 flex justify-between items-center active:scale-95 transition-transform cursor-pointer">
+                          <div key={`${safeStr(p.id)}_${index}`} onClick={() => setSelectedPlace(p)} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-50 flex justify-between items-center active:scale-95 transition-transform cursor-pointer">
                             <div className="pr-4 overflow-hidden flex-1">
                               <h4 className="font-bold text-base text-slate-700 truncate">{safeStr(p.name)}</h4>
                               <p className="text-[11px] text-slate-400 mt-1.5 truncate flex items-center gap-1">
-                                <MapPin size={10}/> {safeStr(p.district)} {safeStr(p.address)}
+                                <MapPin size={10}/> {normalizeAddressText(p)}
                               </p>
                             </div>
                             <button 
@@ -1763,8 +1864,8 @@ export default function App() {
                    mapStatus={mapStatus} 
                    currentCity={currentCity}
                    lockViewport={lockMapViewport}
-                   mapView={mapView}
-                   onMapViewChange={setMapView}
+                   mapView={routeMapView}
+                   onMapViewChange={setRouteMapView}
                    routeModes={segmentModes} 
                  />
 
@@ -1859,6 +1960,7 @@ export default function App() {
                              <div className="flex flex-col gap-1 shrink-0 ml-2">
                                <button disabled={i===0} onClick={() => movePlace(i, 'up')} className="p-1 text-slate-400 hover:text-blue-500 disabled:opacity-20 active:scale-90 transition-all"><ChevronUp size={16}/></button>
                                <button disabled={i===tripPlaces.length-1} onClick={() => movePlace(i, 'down')} className="p-1 text-slate-400 hover:text-blue-500 disabled:opacity-20 active:scale-90 transition-all"><ChevronDown size={16}/></button>
+                               <button onClick={() => removePlaceFromActiveTrip(i)} className="p-1 text-slate-400 hover:text-red-500 active:scale-90 transition-all" title="删除节点"><Trash2 size={15}/></button>
                              </div>
                            </div>
                            

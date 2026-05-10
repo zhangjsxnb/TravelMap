@@ -164,7 +164,7 @@ export default async function handler(req, res) {
 
   const apiKey = process.env.ALIYUN_API_KEY || "";
   const baseUrl = process.env.ALIYUN_BASE_URL || "https://dashscope.aliyuncs.com/compatible-mode/v1";
-  const model = process.env.ALIYUN_MODEL || "qwen-plus";
+  const model = process.env.ALIYUN_MODEL || "qwen3.6-plus-2026-04-02";
 
   if (!apiKey) {
     res.status(500).json({ error: "Missing ALIYUN_API_KEY" });
@@ -237,3 +237,4 @@ export default async function handler(req, res) {
     res.status(500).json({ error: "Planner route failed" });
   }
 }
+
