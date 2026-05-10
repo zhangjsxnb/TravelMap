@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useMemo, useRef, memo } from 'react';
 import { 
   Map as MapIcon, List, User, Search, MapPin, Plus, Heart, 
-  Navigation, CheckCircle2, Circle, 
+  Navigation, CheckCircle2, Circle, Clock,
   X, Sparkles, Trash2, ClipboardList,
-  Mail, KeyRound, Loader2, LogOut, AlertCircle, ChevronDown, ChevronLeft, LocateFixed,
+  Mail, KeyRound, Loader2, LogOut, AlertCircle, ChevronDown, ChevronLeft, ChevronRight, LocateFixed,
   Star, ChevronUp, Car, Bus, Footprints, Bike, Settings, Edit2, CornerDownLeft
 } from 'lucide-react';
 
