@@ -144,8 +144,15 @@ const getLngLat = (loc) => {
 const normalizeAddressText = (placeData) => {
   const address = safeStr(placeData?.address).trim();
   const district = safeStr(placeData?.district).trim();
-  if (address && address !== '地图标记地点') return district ? `${district} ${address}` : address;
-  if (district) return district;
+  const merged = address && address !== '地图标记地点' ? (district ? `${district} ${address}` : address) : district;
+  if (merged) {
+    const deduped = merged
+      .split(/\s+/)
+      .filter(Boolean)
+      .reduce((acc, part) => (acc[acc.length - 1] === part ? acc : [...acc, part]), [])
+      .join(' ');
+    return deduped;
+  }
   return '地址待补全';
 };
 
@@ -2129,7 +2136,7 @@ export default function App() {
                           />
                         </div>
                       </div>
-                      <div className="mb-3 flex items-center justify-between">
+                      <div className="mb-3 flex items-center justify-between gap-3">
                         <div className="flex items-center gap-2">
                           <span className="text-[11px] text-slate-500">天数</span>
                           <select
@@ -2152,9 +2159,14 @@ export default function App() {
                             {[1,2,3,4,5,6,7].map((d) => <option key={`day_count_${d}`} value={d}>{d}天</option>)}
                           </select>
                         </div>
-                        <button onClick={() => setCurrentRouteDay((d) => Math.max(1, d - 1))} className="text-xs px-2 py-1 rounded bg-white border border-[#e9e7e3]">◀ DAY</button>
-                        <p className="text-sm font-bold text-slate-700">DAY {currentRouteDay}</p>
-                        <button onClick={() => setCurrentRouteDay((d) => Math.min(totalDays, d + 1))} className="text-xs px-2 py-1 rounded bg-white border border-[#e9e7e3]">DAY ▶</button>
+                        <div className="text-sm font-bold text-slate-700">DAY {currentRouteDay}</div>
+                        <select
+                          value={currentRouteDay}
+                          onChange={(event) => setCurrentRouteDay(Math.max(1, Math.min(totalDays, Number(event.target.value) || 1)))}
+                          className="text-[11px] px-2 py-1 rounded bg-white border border-[#e9e7e3]"
+                        >
+                          {dayOptions.map((d) => <option key={`pick_day_${d}`} value={d}>DAY {d}</option>)}
+                        </select>
                       </div>
                       <div className="space-y-2 max-h-56 overflow-y-auto">
                         {currentDayRows.map((row) => (
@@ -2187,6 +2199,10 @@ export default function App() {
                                 </select>
                               </div>
                               <div className="text-[10px] text-slate-500 mt-0.5 flex items-center gap-1">
+                                <MapPin size={10} />
+                                <span className="truncate max-w-[240px]">{normalizeAddressText(row.place)}</span>
+                              </div>
+                              <div className="text-[10px] text-slate-500 mt-0.5 flex items-center gap-1">
                                 <span>停留</span>
                                 <input
                                   type="number"
@@ -2201,6 +2217,16 @@ export default function App() {
                                 />
                                 <span>分钟</span>
                               </div>
+                              {(() => {
+                                const rowIndex = timelineRows.findIndex((item) => item.id === row.id);
+                                if (rowIndex < 0 || rowIndex >= timelineRows.length - 1) return null;
+                                const seg = segmentRoutes[rowIndex];
+                                return seg ? (
+                                  <div className="mt-1 text-[10px] text-blue-600 font-semibold">
+                                    {(segmentModes[rowIndex] || 'driving') === 'transit' ? '公交' : (segmentModes[rowIndex] || 'driving') === 'walking' ? '步行' : (segmentModes[rowIndex] || 'driving') === 'riding' ? '骑行' : '驾车'} · {(seg.distance / 1000).toFixed(1)}公里 · {Math.round(seg.time / 60)}分钟
+                                  </div>
+                                ) : null;
+                              })()}
                             </div>
                             <div className="text-right text-slate-600 shrink-0">
                               <p>{row.arriveAt} 到达</p>
@@ -2209,67 +2235,6 @@ export default function App() {
                           </div>
                         ))}
                       </div>
-                    </div>
-                    <div className="flex justify-between items-center mb-5">
-                       <h3 className="font-bold text-slate-700 text-base">节点与交通详情</h3>
-                       <span className="text-[10px] bg-blue-100 text-blue-600 px-2 py-0.5 rounded font-bold">可调整顺序</span>
-                    </div>
-                    
-                    <div className="flex flex-col relative">
-                       {tripPlaces.map((p, i) => (
-                         <React.Fragment key={p.id + i}>
-                           <div className="flex gap-4 items-start z-10 relative bg-transparent">
-                             <div className="w-7 h-7 rounded-full bg-blue-500 text-white flex items-center justify-center text-xs font-bold shrink-0 shadow-md relative z-10 mt-1">
-                               {i + 1}
-                             </div>
-                             <div className="flex-1 pb-2">
-                               <div className="font-bold text-sm text-slate-800">{safeStr(p.name)}</div>
-                               <div className="text-[11px] text-slate-500 mt-1 flex items-start gap-1">
-                                  <MapPin size={12} className="shrink-0 mt-0.5" />
-                                  {safeStr(p.address) || safeStr(p.district) || '暂无详细地址'}
-                               </div>
-                             </div>
-                             <div className="flex flex-col gap-1 shrink-0 ml-2">
-                               <button disabled={i===0} onClick={() => movePlace(i, 'up')} className="p-1 text-slate-400 hover:text-blue-500 disabled:opacity-20 active:scale-90 transition-all"><ChevronUp size={16}/></button>
-                               <button disabled={i===tripPlaces.length-1} onClick={() => movePlace(i, 'down')} className="p-1 text-slate-400 hover:text-blue-500 disabled:opacity-20 active:scale-90 transition-all"><ChevronDown size={16}/></button>
-                               <button onClick={() => removePlaceFromActiveTrip(i)} className="p-1 text-slate-400 hover:text-red-500 active:scale-90 transition-all" title="删除节点"><Trash2 size={15}/></button>
-                             </div>
-                           </div>
-                           
-                           {/* 分段交通方式配置区 */}
-                           {i < tripPlaces.length - 1 && (
-                             <div className="ml-[13px] border-l-[2px] border-dashed border-blue-200 pl-6 py-4 my-0.5 relative">
-                               <div className="absolute -left-[11px] top-1/2 -translate-y-1/2 bg-white rounded-full p-1 text-blue-400 border border-blue-100 shadow-sm">
-                                  {(segmentModes[i]||'driving') === 'transit' ? <Bus size={12}/> : (segmentModes[i]||'driving') === 'walking' ? <Footprints size={12}/> : (segmentModes[i]||'driving') === 'riding' ? <Bike size={12}/> : <Car size={12}/>}
-                               </div>
-                               {isCalculatingSegments ? (
-                                 <span className="text-[10px] text-slate-400 font-medium tracking-widest animate-pulse">路线规划中...</span>
-                               ) : segmentRoutes[i] ? (
-                                 <div className="inline-flex items-center gap-2 bg-blue-50/80 px-2.5 py-1.5 rounded-lg border border-blue-100 text-[10px] text-blue-600 font-bold shadow-sm relative overflow-hidden transition-all hover:bg-blue-100">
-                                   <select
-                                     value={segmentModes[i] || 'driving'}
-                                     onChange={(e) => handleSegmentModeChange(i, e.target.value)}
-                                     className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                                   >
-                                     <option value="driving">驾车</option>
-                                     <option value="transit">公交地铁</option>
-                                     <option value="riding">骑行</option>
-                                     <option value="walking">步行</option>
-                                   </select>
-                                   <span className="flex items-center gap-1">
-                                     {(segmentModes[i]||'driving') === 'driving' ? '🚗 驾车' : (segmentModes[i]||'driving') === 'transit' ? '🚌 公交地铁' : (segmentModes[i]||'driving') === 'walking' ? '🚶‍♂️ 步行' : '🚴 骑行'}
-                                     <ChevronDown size={10} className="opacity-50"/>
-                                   </span>
-                                   <span className="opacity-40">|</span> 
-                                   <span>{(segmentRoutes[i].distance/1000).toFixed(1)}公里</span> 
-                                   <span className="opacity-40">|</span> 
-                                   <span>{Math.round(segmentRoutes[i].time/60)}分钟</span>
-                                 </div>
-                               ) : null}
-                             </div>
-                           )}
-                         </React.Fragment>
-                       ))}
                     </div>
 
                     {segmentRoutes.length > 0 && !isCalculatingSegments && (
