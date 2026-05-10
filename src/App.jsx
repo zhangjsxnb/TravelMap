@@ -162,6 +162,8 @@ const safeMergeAddress = (district, address) => {
   return d || a || '';
 };
 
+const isNationwideCity = (city) => safeStr(city) === '全国' || safeStr(city) === '鍏ㄥ浗';
+
 const flattenTripPlaceIds = (trip) => {
   if (!trip) return [];
   if (Array.isArray(trip.days) && trip.days.length > 0) {
@@ -243,6 +245,9 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
           prevCityRef.current = currentCity;
           if (!mapView?.center) {
             map.setZoom(11);
+            if (!isNationwideCity(currentCity) && typeof map.setCity === 'function') {
+              map.setCity(currentCity);
+            }
           }
         }
 
@@ -382,6 +387,7 @@ export default function App() {
   const [newTripName, setNewTripName] = useState('');
   const [newTripDayCount, setNewTripDayCount] = useState(1);
   const [newTripSelectedPlaceIds, setNewTripSelectedPlaceIds] = useState([]);
+  const [newTripPlaceDayMap, setNewTripPlaceDayMap] = useState({});
   
   // 鍒嗘浜ら€氭柟寮忛厤缃?
   const [segmentModes, setSegmentModes] = useState([]); 
@@ -419,6 +425,7 @@ export default function App() {
   const autoComplete = useRef(null);
   const aiRequestingRef = useRef(false);
   const routeCacheRef = useRef(new Map());
+  const searchRequestRef = useRef(0);
 
   // --- 鏈湴缂撳瓨澶囦唤 ---
   useEffect(() => { localStorage.setItem('travel_saved_places', JSON.stringify(savedPlaces)); }, [savedPlaces]);
@@ -429,6 +436,12 @@ export default function App() {
   useEffect(() => { localStorage.setItem('travel_map_view', JSON.stringify(mapView)); }, [mapView]);
   useEffect(() => { localStorage.setItem('travel_route_map_view', JSON.stringify(routeMapView)); }, [routeMapView]);
   useEffect(() => { localStorage.setItem('travel_collapsed_cities', JSON.stringify(collapsedCities)); }, [collapsedCities]);
+
+  useEffect(() => {
+    setNewTripPlaceDayMap((prev) => Object.fromEntries(
+      Object.entries(prev).map(([placeId, day]) => [placeId, Math.max(1, Math.min(newTripDayCount, Number(day) || 1))]),
+    ));
+  }, [newTripDayCount]);
 
   useEffect(() => {
     setSavedPlaces((prev) => {
@@ -544,6 +557,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const requestId = ++searchRequestRef.current;
     const timer = setTimeout(() => {
       if (mapStatus === 'success' && searchQuery) {
         const mergedResults = [];
@@ -555,7 +569,10 @@ export default function App() {
           seen.add(key);
           mergedResults.push(item);
         };
-        const done = () => setSearchResults(mergedResults.slice(0, 50));
+        const done = () => {
+          if (searchRequestRef.current !== requestId) return;
+          setSearchResults(mergedResults.slice(0, 50));
+        };
         let pending = 0;
         const finishOne = () => {
           pending -= 1;
@@ -565,9 +582,10 @@ export default function App() {
         try {
           if (window.AMap?.AutoComplete) {
             pending += 1;
-            const autoOptions = currentCity !== '鍏ㄥ浗' ? { city: currentCity, citylimit: true } : { city: '鍏ㄥ浗' };
-            if (!autoComplete.current) autoComplete.current = new window.AMap.AutoComplete(autoOptions);
+            const autoOptions = !isNationwideCity(currentCity) ? { city: currentCity, citylimit: true } : { city: '全国' };
+            autoComplete.current = new window.AMap.AutoComplete(autoOptions);
             autoComplete.current.search(searchQuery, (status, result) => {
+              if (searchRequestRef.current !== requestId) return;
               const tips = status === 'complete' && result?.tips ? result.tips : [];
               tips.forEach((t) => append(t));
               finishOne();
@@ -577,10 +595,11 @@ export default function App() {
           if (window.AMap?.InputTips) {
             pending += 1;
             const inputTips = new window.AMap.InputTips({
-              city: currentCity === '鍏ㄥ浗' ? '鍏ㄥ浗' : currentCity,
+              city: isNationwideCity(currentCity) ? '全国' : currentCity,
               citylimit: false,
             });
             inputTips.search(searchQuery, (status, result) => {
+              if (searchRequestRef.current !== requestId) return;
               const tips = status === 'complete' ? (result?.tips || []) : [];
               tips.forEach((t) => append(t));
               finishOne();
@@ -590,12 +609,13 @@ export default function App() {
           if (window.AMap?.PlaceSearch) {
             pending += 1;
             const placeSearch = new window.AMap.PlaceSearch({
-              city: currentCity === '鍏ㄥ浗' ? '鍏ㄥ浗' : currentCity,
+              city: isNationwideCity(currentCity) ? '全国' : currentCity,
               citylimit: false,
               pageSize: 30,
               extensions: 'all',
             });
             placeSearch.search(searchQuery, (s2, r2) => {
+              if (searchRequestRef.current !== requestId) return;
               const pois = s2 === 'complete' ? (r2?.poiList?.pois || []) : [];
               pois.forEach((poi) => append({
                 id: safeStr(poi.id) || `${safeStr(poi.name)}_${safeStr(poi.location?.lng)}_${safeStr(poi.location?.lat)}`,
@@ -611,17 +631,23 @@ export default function App() {
           }
 
           if (pending === 0) {
-            setSearchResults([]);
+            done();
           }
         } catch(e) {
           console.error('Search error', e);
-          setSearchResults([]);
+          if (searchRequestRef.current === requestId) {
+            setSearchResults([]);
+          }
         }
       } else {
-        setSearchResults([]);
+        if (searchRequestRef.current === requestId) {
+          setSearchResults([]);
+        }
       }
     }, 300);
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+    };
   }, [searchQuery, mapStatus, currentCity]);
 
   // ==========================================
@@ -1282,6 +1308,7 @@ export default function App() {
   const exitSearch = () => {
     setIsSearching(false);
     setSearchQuery('');
+    searchRequestRef.current += 1;
     setSearchResults([]);
   };
 
@@ -1290,6 +1317,7 @@ export default function App() {
     localStorage.setItem('lastCity', city); 
     setMapView({ zoom: 11, center: null });
     setRouteMapView({ zoom: 11, center: null });
+    searchRequestRef.current += 1;
     setSearchResults([]);
     setShowCityPicker(false);
     setCustomCityInput('');
@@ -1325,43 +1353,46 @@ export default function App() {
 
   const addPlaceToActiveTrip = async (placeId) => {
     if (!activeTripId) return;
-    let updatedTrip = null;
-    setTrips((prevTrips) => prevTrips.map((trip) => {
-      if (trip.id !== activeTripId) return trip;
-      const normalized = normalizeTrip(trip);
-      const nextDays = normalized.days.map((day, index) => (
+    await updateTripDays(activeTripId, (normalized) => ({
+      ...normalized,
+      days: normalized.days.map((day, index) => (
         index === Math.max(0, currentRouteDay - 1)
           ? { ...day, places: Array.from(new Set([...(day.places || []), placeId])) }
           : day
-      ));
-      updatedTrip = normalizeTrip({ ...normalized, days: nextDays });
-      return updatedTrip;
+      )),
     }));
-    if (user && !user.is_anonymous && supabase && updatedTrip) {
-      try { await supabase.from('trips').update({ places: updatedTrip.places, days: updatedTrip.days }).eq('id', activeTripId); } catch (e) { logCloudError('Add place to trip', e); }
-    }
   };
   void addPlaceToActiveTrip;
 
   const movePlaceToTripDay = async (placeId, targetDay) => {
     if (!activeTripId) return;
-    let updatedTrip = null;
-    setTrips((prevTrips) => prevTrips.map((trip) => {
-      if (trip.id !== activeTripId) return trip;
-      const normalized = normalizeTrip(trip);
-      const nextDays = normalized.days.map((day, index) => {
+    await updateTripDays(activeTripId, (normalized) => ({
+      ...normalized,
+      days: normalized.days.map((day, index) => {
         const filteredPlaces = (day.places || []).filter((id) => id !== placeId);
         if (index === targetDay - 1) {
           return { ...day, places: [...filteredPlaces, placeId] };
         }
         return { ...day, places: filteredPlaces };
-      });
-      updatedTrip = normalizeTrip({ ...normalized, days: nextDays });
+      }),
+    }));
+  };
+
+  const updateTripDays = async (tripId, updater) => {
+    let updatedTrip = null;
+    setTrips((prevTrips) => prevTrips.map((trip) => {
+      if (trip.id !== tripId) return trip;
+      updatedTrip = normalizeTrip(updater(normalizeTrip(trip)));
       return updatedTrip;
     }));
     if (user && !user.is_anonymous && supabase && updatedTrip) {
-      try { await supabase.from('trips').update({ places: updatedTrip.places, days: updatedTrip.days }).eq('id', activeTripId); } catch (e) { logCloudError('Move trip place day', e); }
+      try {
+        await supabase.from('trips').update({ places: updatedTrip.places, days: updatedTrip.days }).eq('id', tripId);
+      } catch (e) {
+        logCloudError('Update trip days', e);
+      }
     }
+    return updatedTrip;
   };
 
   const filteredFavs = savedPlaces.filter(p => 
@@ -1922,36 +1953,57 @@ export default function App() {
                       <button
                         key={`new_trip_place_${place.id}`}
                         type="button"
-                        onClick={() => setNewTripSelectedPlaceIds((prev) => checked ? prev.filter((id) => id !== place.id) : [...prev, place.id])}
+                        onClick={() => {
+                          setNewTripSelectedPlaceIds((prev) => checked ? prev.filter((id) => id !== place.id) : [...prev, place.id]);
+                          setNewTripPlaceDayMap((prev) => checked ? Object.fromEntries(Object.entries(prev).filter(([key]) => key !== place.id)) : { ...prev, [place.id]: prev[place.id] || 1 });
+                        }}
                         className={`w-full text-left px-3 py-2 rounded-xl border transition-colors ${checked ? 'bg-blue-50 border-blue-200 text-slate-700' : 'bg-white border-transparent text-slate-600'}`}
                       >
-                        <div className="font-bold text-sm truncate">{safeStr(place.name)}</div>
-                        <div className="text-[11px] truncate text-slate-400">{safeStr(place.city)} {safeStr(place.address)}</div>
+                        <div className="flex items-start gap-2">
+                          <div className="flex-1 min-w-0">
+                            <div className="font-bold text-sm truncate">{safeStr(place.name)}</div>
+                            <div className="text-[11px] truncate text-slate-400">{safeStr(place.city)} {safeStr(place.address)}</div>
+                          </div>
+                          {checked ? (
+                            <select
+                              value={Math.max(1, Math.min(newTripDayCount, Number(newTripPlaceDayMap[place.id] || 1)))}
+                              onClick={(event) => event.stopPropagation()}
+                              onChange={(event) => setNewTripPlaceDayMap((prev) => ({ ...prev, [place.id]: Math.max(1, Math.min(newTripDayCount, Number(event.target.value) || 1)) }))}
+                              className="shrink-0 px-2 py-1 rounded-lg border border-blue-200 bg-white text-xs font-bold"
+                            >
+                              {Array.from({ length: newTripDayCount }, (_, idx) => idx + 1).map((day) => (
+                                <option key={`new_trip_place_day_${place.id}_${day}`} value={day}>D{day}</option>
+                              ))}
+                            </select>
+                          ) : null}
+                        </div>
                       </button>
                     );
                   })}
                 </div>
               </div>
               <div className="flex gap-3">
-                <button className="flex-1 py-3 rounded-xl bg-gray-100 text-sm font-bold text-slate-600 active:scale-95" onClick={() => { setNewTripModalVisible(false); setNewTripName(''); setNewTripDayCount(1); setNewTripSelectedPlaceIds([]); }}>鍙栨秷</button>
+                <button className="flex-1 py-3 rounded-xl bg-gray-100 text-sm font-bold text-slate-600 active:scale-95" onClick={() => { setNewTripModalVisible(false); setNewTripName(''); setNewTripDayCount(1); setNewTripSelectedPlaceIds([]); setNewTripPlaceDayMap({}); }}>鍙栨秷</button>
                 <button className="flex-1 py-3 rounded-xl text-white text-sm font-bold active:scale-95 disabled:opacity-50" style={{ backgroundColor: COLORS.primary }} disabled={!newTripName.trim()} onClick={() => {
                   if (newTripName.trim()) {
                     const dayCount = Math.max(1, newTripDayCount);
-                    const firstDayPlaces = Array.from(new Set(newTripSelectedPlaceIds));
+                    const selectedPlaceIds = Array.from(new Set(newTripSelectedPlaceIds));
+                    const tripDays = Array.from({ length: dayCount }, (_, index) => ({
+                      id: `day_${index + 1}`,
+                      title: `Day ${index + 1}`,
+                      places: selectedPlaceIds.filter((placeId) => Math.max(1, Math.min(dayCount, Number(newTripPlaceDayMap[placeId] || 1))) === index + 1),
+                    }));
                     createTrip({
                       id: Date.now().toString(),
                       name: newTripName.trim(),
-                      places: firstDayPlaces,
-                      days: Array.from({ length: dayCount }, (_, index) => ({
-                        id: `day_${index + 1}`,
-                        title: `Day ${index + 1}`,
-                        places: index === 0 ? firstDayPlaces : [],
-                      })),
+                      places: selectedPlaceIds,
+                      days: tripDays,
                     });
                     setNewTripModalVisible(false);
                     setNewTripName('');
                     setNewTripDayCount(1);
                     setNewTripSelectedPlaceIds([]);
+                    setNewTripPlaceDayMap({});
                   }
                 }}>纭鍒涘缓</button>
               </div>
