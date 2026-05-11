@@ -1569,6 +1569,34 @@ export default function App() {
     }));
   };
 
+  const movePlaceInDay = async (placeId, direction) => {
+    if (!activeTripId) return;
+    await updateTripDays(activeTripId, (normalized) => ({
+      ...normalized,
+      days: normalized.days.map((day, index) => {
+        if (index !== currentRouteDay - 1) return day;
+        const places = [...(day.places || [])];
+        const idx = places.indexOf(placeId);
+        if (idx === -1) return day;
+        const swapIdx = idx + direction;
+        if (swapIdx < 0 || swapIdx >= places.length) return day;
+        [places[idx], places[swapIdx]] = [places[swapIdx], places[idx]];
+        return { ...day, places };
+      }),
+    }));
+  };
+
+  const removePlaceFromDay = async (placeId) => {
+    if (!activeTripId) return;
+    await updateTripDays(activeTripId, (normalized) => ({
+      ...normalized,
+      days: normalized.days.map((day, index) => {
+        if (index !== currentRouteDay - 1) return day;
+        return { ...day, places: (day.places || []).filter((id) => id !== placeId) };
+      }),
+    }));
+  };
+
   const updateTripDays = async (tripId, updater) => {
     let updatedTrip = null;
     setTrips((prevTrips) => prevTrips.map((trip) => {
@@ -2429,7 +2457,20 @@ export default function App() {
                               <div className="flex gap-3 min-w-0">
                                 <div className="w-7 h-10 rounded-[14px] shrink-0 text-white flex items-start justify-center pt-2" style={{ backgroundColor: COLORS.primary }}><MapPin size={11} /></div>
                                 <div className="flex flex-col gap-1 min-w-0">
-                                  <h3 className="font-bold text-slate-800 text-[13px] break-words leading-snug">{safeStr(row.place.name)}</h3>
+                                  <div className="flex items-center gap-1.5 min-w-0">
+                                    <h3 className="font-bold text-slate-800 text-[13px] break-words leading-snug flex-1 min-w-0">{safeStr(row.place.name)}</h3>
+                                    <div className="flex items-center gap-1 shrink-0">
+                                      <button type="button" onClick={() => movePlaceInDay(row.place.id, -1)} disabled={currentDayRows.indexOf(row) === 0} className="w-6 h-6 flex items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 disabled:opacity-20 disabled:cursor-not-allowed transition-colors" title="上移">
+                                        <ChevronLeft size={13} style={{ transform: 'rotate(90deg)' }} />
+                                      </button>
+                                      <button type="button" onClick={() => movePlaceInDay(row.place.id, 1)} disabled={currentDayRows.indexOf(row) === currentDayRows.length - 1} className="w-6 h-6 flex items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 disabled:opacity-20 disabled:cursor-not-allowed transition-colors" title="下移">
+                                        <ChevronRight size={13} style={{ transform: 'rotate(90deg)' }} />
+                                      </button>
+                                      <button type="button" onClick={() => removePlaceFromDay(row.place.id)} className="w-6 h-6 flex items-center justify-center rounded-lg text-red-300 hover:bg-red-50 hover:text-red-500 transition-colors" title="删除">
+                                        <Trash2 size={12} />
+                                      </button>
+                                    </div>
+                                  </div>
                                   <div className="text-[10px] leading-4 text-slate-400 break-words">{normalizeAddressText(row.place)}</div>
                                   <div className="flex items-center flex-wrap gap-1.5 text-slate-400 mt-1">
                                     <div className="flex items-center gap-1 rounded-full bg-slate-50 border border-slate-100 px-2 py-1">
