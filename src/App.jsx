@@ -346,7 +346,7 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
   if (mapStatus === 'error') return <div className="w-full aspect-square bg-red-50 border-2 border-dashed border-red-200 rounded-3xl flex flex-col items-center justify-center p-6 text-center shadow-inner mb-6"><AlertCircle size={32} className="text-red-300 mb-3" /><p className="text-sm font-bold text-red-500 mb-1">地图加载失败</p><p className="text-[10px] text-red-400">{mapErrorMsg}</p></div>;
 
   return (
-    <div className={`w-full min-h-[300px] overflow-hidden relative ${className} ${heightClassName}`.trim()} style={{ backgroundColor: COLORS.light }}>
+    <div className={`w-full min-h-[300px] relative ${className} ${heightClassName}`.trim()} style={{ backgroundColor: COLORS.light }}>
       <div ref={containerRef} className="w-full h-full" />
     </div>
   );
@@ -2344,7 +2344,7 @@ export default function App() {
             <div className="flex-1 overflow-y-auto overscroll-y-contain">
               <div className="mx-auto w-full max-w-[960px] px-3 sm:px-5 py-3 sm:py-4">
                 <div className="pb-3">
-                  <div className="relative bg-slate-200 rounded-[28px] overflow-hidden border border-slate-200 shadow-[0_10px_24px_rgba(15,23,42,0.08)]">
+                  <div className="relative bg-slate-200 rounded-[28px] border border-slate-200 shadow-[0_10px_24px_rgba(15,23,42,0.08)]">
                     <RealMap
                       places={currentDayTripPlaces}
                       isRoute={true}
