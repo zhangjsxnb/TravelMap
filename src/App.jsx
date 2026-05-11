@@ -1131,7 +1131,7 @@ export default function App() {
   }, [activeTrip, currentRouteDay]);
 
   // ==========================================
-  // 浜戠鍚屾鍐欐搷浣滈€昏緫
+  // 数据同步写入操作逻辑
   // ==========================================
   const handleSavePlace = async (placeData, stayOpen = false) => {
     const placeName = safeStr(placeData.name) || '未知地点';
@@ -2067,7 +2067,7 @@ export default function App() {
                    </span>
                 </div>
                 <div className="flex justify-between items-center p-3 bg-white rounded-2xl shadow-sm">
-                   <span className="text-sm font-bold text-gray-700">浜戠璐﹀彿</span>
+                   <span className="text-sm font-bold text-gray-700">云端账号</span>
                    <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${supabase && user && !user.is_anonymous ? 'text-blue-600 bg-blue-50' : 'text-slate-400 bg-slate-100'}`}>
                      {supabase && user && !user.is_anonymous ? '已连接 Supabase' : '未验证'}
                    </span>
@@ -2351,38 +2351,45 @@ export default function App() {
                       ))}
                     </div>
 
-                    <div className="mt-3 flex items-center justify-between">
+                    <div className="mt-3 flex items-center">
                       <button
                         type="button"
-                        onClick={() => setItinerarySearchQuery(itinerarySearchQuery === null ? '' : (itinerarySearchQuery === '' ? '\u200b' : itinerarySearchQuery))}
-                        className="flex items-center gap-2 px-4 py-2 rounded-2xl border border-slate-200 bg-slate-50 text-slate-500 text-xs font-bold hover:bg-slate-100 transition-colors"
-                        style={{ minWidth: 0 }}
+                        onClick={() => setItinerarySearchQuery(itinerarySearchQuery === null ? '' : null)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-slate-200 bg-slate-50 text-slate-400 text-xs font-semibold hover:bg-slate-100 transition-colors"
                         aria-label="添加地点"
                       >
-                        <Search size={13} />
+                        <Search size={12} />
                         <span>添加地点</span>
-                        <Plus size={13} />
                       </button>
                     </div>
                     {itinerarySearchQuery !== null && (
-                      <div className="mt-2 rounded-2xl bg-slate-50 px-3 py-2">
-                        <div className="relative">
-                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
-                          <input
-                            autoFocus
-                            value={itinerarySearchQuery === '\u200b' ? '' : itinerarySearchQuery}
-                            onChange={(event) => setItinerarySearchQuery(event.target.value)}
-                            placeholder="搜索高德地点并加入当前 Day"
-                            className="w-full pl-9 pr-9 py-2 rounded-xl border border-slate-200 bg-white text-sm outline-none"
-                          />
-                          <button type="button" onClick={() => setItinerarySearchQuery(null)} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500">
-                            <X size={14} />
-                          </button>
-                        </div>
-                        {(itinerarySearchQuery && itinerarySearchQuery !== '\u200b') ? (
-                          <div className="mt-2 max-h-44 overflow-y-auto space-y-2 pr-1">
-                            {isSearchingItinerary ? <p className="text-xs text-slate-400 py-2">搜索中...</p> : null}
-                            {!isSearchingItinerary && itinerarySearchResults.length === 0 ? <p className="text-xs text-slate-400 py-2">没有找到可加入的地点</p> : null}
+                      <div className="fixed inset-0 z-50 flex items-end justify-center" onClick={() => { setItinerarySearchQuery(null); setItinerarySearchResults([]); }}>
+                        <div className="absolute inset-0 bg-black/20 backdrop-blur-[2px]" />
+                        <div
+                          className="relative w-full max-w-lg bg-white rounded-t-3xl px-4 pt-4 pb-8 shadow-2xl"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <div className="w-10 h-1 rounded-full bg-slate-200 mx-auto mb-4" />
+                          <p className="text-xs font-bold text-slate-400 mb-2 px-1">搜索地点加入 DAY {currentRouteDay}</p>
+                          <div className="relative">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+                            <input
+                              autoFocus
+                              value={itinerarySearchQuery}
+                              onChange={(event) => setItinerarySearchQuery(event.target.value)}
+                              placeholder="输入地点名称..."
+                              className="w-full pl-9 pr-9 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm outline-none focus:border-slate-300"
+                            />
+                            {itinerarySearchQuery ? (
+                              <button type="button" onClick={() => setItinerarySearchQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500">
+                                <X size={14} />
+                              </button>
+                            ) : null}
+                          </div>
+                          <div className="mt-2 max-h-52 overflow-y-auto space-y-1.5 pr-0.5">
+                            {isSearchingItinerary ? <p className="text-xs text-slate-400 py-3 text-center">搜索中...</p> : null}
+                            {!isSearchingItinerary && itinerarySearchQuery && itinerarySearchResults.length === 0 ? <p className="text-xs text-slate-400 py-3 text-center">没有找到地点</p> : null}
+                            {!itinerarySearchQuery ? <p className="text-xs text-slate-400 py-3 text-center">也可以直接点击地图添加地点</p> : null}
                             {itinerarySearchResults.map((result) => (
                               <button
                                 key={`route_search_${safeStr(result.id) || placeIdentityKey(result, currentCity)}`}
@@ -2392,16 +2399,14 @@ export default function App() {
                                   setItinerarySearchQuery(null);
                                   setItinerarySearchResults([]);
                                 }}
-                                className="w-full text-left rounded-2xl border border-slate-200 bg-white px-3 py-2"
+                                className="w-full text-left rounded-2xl border border-slate-100 bg-slate-50 px-3 py-2 hover:bg-slate-100 transition-colors"
                               >
                                 <p className="text-sm font-semibold text-slate-700 break-words">{safeStr(result.name)}</p>
-                                <p className="text-[11px] text-slate-400 mt-1 break-words">{normalizeAddressText(result)}</p>
+                                <p className="text-[11px] text-slate-400 mt-0.5 break-words">{normalizeAddressText(result)}</p>
                               </button>
                             ))}
                           </div>
-                        ) : (
-                          <p className="mt-2 text-[11px] text-slate-400">也支持直接点击上方地图，把当前位置加入这一天。</p>
-                        )}
+                        </div>
                       </div>
                     )}
                   </div>
