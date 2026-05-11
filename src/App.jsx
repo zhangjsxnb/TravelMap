@@ -212,6 +212,8 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
   const markerClickRef = useRef(onMarkerClick);
   const mapClickRef = useRef(onMapClick);
   const mapViewChangeRef = useRef(onMapViewChange);
+  const mapViewRef = useRef(mapView);
+  const debounceRef = useRef(null);
 
   useEffect(() => {
     markerClickRef.current = onMarkerClick;
@@ -220,16 +222,31 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
   }, [onMarkerClick, onMapClick, onMapViewChange]);
 
   useEffect(() => {
+    mapViewRef.current = mapView;
+  }, [mapView]);
+
+  useEffect(() => {
     if (mapStatus === 'success' && containerRef.current && window.AMap?.Map) {
       try {
         if (!mapInstance.current) {
           mapInstance.current = new window.AMap.Map(containerRef.current, {
-            zoom: mapView?.zoom || 11,
-            center: mapView?.center || undefined,
+            zoom: mapViewRef.current?.zoom || 11,
+            center: mapViewRef.current?.center || undefined,
             mapStyle: 'amap://styles/normal',
             isHotspot: true 
           });
-          
+
+          const handleViewChange = () => {
+            if (debounceRef.current) clearTimeout(debounceRef.current);
+            debounceRef.current = setTimeout(() => {
+              const zoom = mapInstance.current?.getZoom?.();
+              const center = mapInstance.current?.getCenter?.();
+              if (typeof zoom === 'number' && center && mapViewChangeRef.current) {
+                mapViewChangeRef.current({ zoom, center: [center.lng, center.lat] });
+              }
+            }, 300);
+          };
+
           mapInstance.current.on('hotspotclick', (e) => {
             if (markerClickRef.current) {
               markerClickRef.current({
@@ -246,20 +263,8 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
               mapClickRef.current(event);
             }
           });
-          mapInstance.current.on('zoomend', () => {
-            const zoom = mapInstance.current?.getZoom?.();
-            const center = mapInstance.current?.getCenter?.();
-            if (typeof zoom === 'number' && center && mapViewChangeRef.current) {
-              mapViewChangeRef.current({ zoom, center: [center.lng, center.lat] });
-            }
-          });
-          mapInstance.current.on('moveend', () => {
-            const zoom = mapInstance.current?.getZoom?.();
-            const center = mapInstance.current?.getCenter?.();
-            if (typeof zoom === 'number' && center && mapViewChangeRef.current) {
-              mapViewChangeRef.current({ zoom, center: [center.lng, center.lat] });
-            }
-          });
+          mapInstance.current.on('zoomend', handleViewChange);
+          mapInstance.current.on('moveend', handleViewChange);
         }
         
         const map = mapInstance.current;
@@ -275,8 +280,9 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
         }
 
         map.clearMap();
-        if (mapView?.center && typeof mapView?.zoom === 'number') {
-          map.setZoomAndCenter(mapView.zoom, mapView.center);
+        const currentMapView = mapViewRef.current;
+        if (currentMapView?.center && typeof currentMapView?.zoom === 'number') {
+          map.setZoomAndCenter(currentMapView.zoom, currentMapView.center);
         }
 
         places.forEach((p, idx) => {
@@ -325,7 +331,7 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
           }
         }
 
-        const shouldFitView = places.length > 0 && (!lockViewport || isRoute || !mapView?.center);
+        const shouldFitView = places.length > 0 && (!lockViewport || isRoute || !currentMapView?.center);
         if (shouldFitView) {
           map.setFitView(undefined, false, [48, 48, 48, 48]);
         }
@@ -333,7 +339,7 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
         console.error("Map rendering error:", err);
       }
     }
-  }, [places, isRoute, mapStatus, currentCity, lockViewport, mapView, routeSegments]);
+  }, [places, isRoute, mapStatus, currentCity, lockViewport, routeSegments]);
 
   if (mapStatus === 'loading') return <div className="w-full aspect-square bg-blue-50 rounded-3xl flex items-center justify-center text-blue-300 shadow-inner mb-6"><Loader2 className="animate-spin" /></div>;
   if (mapStatus === 'no-key') return <div className="w-full aspect-square bg-gray-50 border-2 border-dashed border-gray-200 rounded-3xl flex flex-col items-center justify-center p-6 text-center shadow-inner mb-6"><MapIcon size={32} className="text-gray-300 mb-3" /><p className="text-sm font-bold text-gray-500 mb-1">尚未配置完整的地图 API</p></div>;
@@ -2337,7 +2343,7 @@ export default function App() {
             </div>
             <div className="flex-1 overflow-y-auto overscroll-y-contain">
               <div className="mx-auto w-full max-w-[960px] px-3 sm:px-5 py-3 sm:py-4">
-                <div className="sticky top-0 z-20 pb-3 bg-slate-50">
+                <div className="pb-3">
                   <div className="relative bg-slate-200 rounded-[28px] overflow-hidden border border-slate-200 shadow-[0_10px_24px_rgba(15,23,42,0.08)]">
                     <RealMap
                       places={currentDayTripPlaces}
@@ -2352,7 +2358,6 @@ export default function App() {
                       className="rounded-[28px]"
                       heightClassName="h-[280px] sm:h-[360px] lg:h-[400px]"
                     />
-                    <div className="pointer-events-none absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-black/20 to-transparent" />
                   </div>
                 </div>
                 <div className="bg-white rounded-[28px] shadow-[0_12px_30px_rgba(15,23,42,0.06)] border border-slate-100 overflow-hidden">
