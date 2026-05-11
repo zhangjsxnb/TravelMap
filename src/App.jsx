@@ -1006,7 +1006,7 @@ export default function App() {
   }, [routeDayCount, activeTripId]);
 
   useEffect(() => {
-    setItinerarySearchQuery('');
+    setItinerarySearchQuery(null);
     setItinerarySearchResults([]);
     setIsSearchingItinerary(false);
   }, [activeTripId, currentRouteDay, showRoutePanel]);
