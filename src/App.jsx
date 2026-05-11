@@ -92,6 +92,15 @@ const toTimeText = (totalMinute) => {
   return `${hour}:${minute}`;
 };
 
+const formatDurationCn = (totalMinute) => {
+  const safeMinute = Math.max(0, Math.round(Number(totalMinute) || 0));
+  const hour = Math.floor(safeMinute / 60);
+  const minute = safeMinute % 60;
+  if (hour <= 0) return `${minute}分`;
+  if (minute === 0) return `${hour}小时`;
+  return `${hour}小时${minute}分`;
+};
+
 const estimateStayMinutes = (place) => {
   const name = safeStr(place?.name);
   const category = safeStr(place?.category);
@@ -196,10 +205,19 @@ const normalizeTrip = (trip) => {
 // ==========================================
 // 地图核心组件
 // ==========================================
-const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, currentCity, onMarkerClick, lockViewport = true, mapView, onMapViewChange }) => {
+const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, currentCity, onMarkerClick, onMapClick, lockViewport = true, mapView, onMapViewChange, routeSegments = [], className = '', heightClassName = '' }) => {
   const containerRef = useRef(null);
   const mapInstance = useRef(null);
   const prevCityRef = useRef('');
+  const markerClickRef = useRef(onMarkerClick);
+  const mapClickRef = useRef(onMapClick);
+  const mapViewChangeRef = useRef(onMapViewChange);
+
+  useEffect(() => {
+    markerClickRef.current = onMarkerClick;
+    mapClickRef.current = onMapClick;
+    mapViewChangeRef.current = onMapViewChange;
+  }, [onMarkerClick, onMapClick, onMapViewChange]);
 
   useEffect(() => {
     if (mapStatus === 'success' && containerRef.current && window.AMap?.Map) {
@@ -213,8 +231,8 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
           });
           
           mapInstance.current.on('hotspotclick', (e) => {
-            if (onMarkerClick) {
-              onMarkerClick({
+            if (markerClickRef.current) {
+              markerClickRef.current({
                 id: e.id,
                 name: e.name,
                 location: e.lnglat,
@@ -223,18 +241,23 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
               });
             }
           });
+          mapInstance.current.on('click', (event) => {
+            if (mapClickRef.current) {
+              mapClickRef.current(event);
+            }
+          });
           mapInstance.current.on('zoomend', () => {
             const zoom = mapInstance.current?.getZoom?.();
             const center = mapInstance.current?.getCenter?.();
-            if (typeof zoom === 'number' && center && onMapViewChange) {
-              onMapViewChange({ zoom, center: [center.lng, center.lat] });
+            if (typeof zoom === 'number' && center && mapViewChangeRef.current) {
+              mapViewChangeRef.current({ zoom, center: [center.lng, center.lat] });
             }
           });
           mapInstance.current.on('moveend', () => {
             const zoom = mapInstance.current?.getZoom?.();
             const center = mapInstance.current?.getCenter?.();
-            if (typeof zoom === 'number' && center && onMapViewChange) {
-              onMapViewChange({ zoom, center: [center.lng, center.lat] });
+            if (typeof zoom === 'number' && center && mapViewChangeRef.current) {
+              mapViewChangeRef.current({ zoom, center: [center.lng, center.lat] });
             }
           });
         }
@@ -261,43 +284,63 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
           if (coords) {
              const marker = new window.AMap.Marker({
                position: coords,
-               cursor: onMarkerClick ? 'pointer' : 'default',
+               cursor: markerClickRef.current ? 'pointer' : 'default',
                label: { content: String(isRoute ? idx + 1 : safeStr(p.name)), direction: 'top' },
                extData: p
              });
-             if (onMarkerClick) marker.on('click', () => onMarkerClick(p));
+             if (markerClickRef.current) marker.on('click', () => markerClickRef.current(p));
              map.add(marker);
           }
         });
 
         if (isRoute && places.length >= 2) {
-          const path = places.map(p => getLngLat(p.location)).filter(Boolean);
-          if (path.length >= 2) {
-            const polyline = new window.AMap.Polyline({
-              path,
-              strokeColor: '#95C2E2',
-              strokeWeight: 6,
-              strokeOpacity: 0.9,
-              lineJoin: 'round',
-              lineCap: 'round',
+          const routePaths = routeSegments
+            .map((segment) => Array.isArray(segment?.path) ? segment.path.filter(Boolean) : [])
+            .filter((path) => path.length >= 2);
+          if (routePaths.length > 0) {
+            routePaths.forEach((path) => {
+              const polyline = new window.AMap.Polyline({
+                path,
+                strokeColor: '#95C2E2',
+                strokeWeight: 6,
+                strokeOpacity: 0.92,
+                lineJoin: 'round',
+                lineCap: 'round',
+              });
+              map.add(polyline);
             });
-            map.add(polyline);
+          } else {
+            const path = places.map(p => getLngLat(p.location)).filter(Boolean);
+            if (path.length >= 2) {
+              const polyline = new window.AMap.Polyline({
+                path,
+                strokeColor: '#95C2E2',
+                strokeWeight: 6,
+                strokeOpacity: 0.9,
+                lineJoin: 'round',
+                lineCap: 'round',
+              });
+              map.add(polyline);
+            }
           }
-        } else if (places.length > 0 && (!lockViewport || isRoute || !mapView?.center)) {
-          map.setFitView();
+        }
+
+        const shouldFitView = places.length > 0 && (!lockViewport || isRoute || !mapView?.center);
+        if (shouldFitView) {
+          map.setFitView(undefined, false, [48, 48, 48, 48]);
         }
       } catch (err) {
         console.error("Map rendering error:", err);
       }
     }
-  }, [places, isRoute, mapStatus, currentCity, onMarkerClick, lockViewport, mapView, onMapViewChange]);
+  }, [places, isRoute, mapStatus, currentCity, lockViewport, mapView, routeSegments]);
 
   if (mapStatus === 'loading') return <div className="w-full aspect-square bg-blue-50 rounded-3xl flex items-center justify-center text-blue-300 shadow-inner mb-6"><Loader2 className="animate-spin" /></div>;
   if (mapStatus === 'no-key') return <div className="w-full aspect-square bg-gray-50 border-2 border-dashed border-gray-200 rounded-3xl flex flex-col items-center justify-center p-6 text-center shadow-inner mb-6"><MapIcon size={32} className="text-gray-300 mb-3" /><p className="text-sm font-bold text-gray-500 mb-1">尚未配置完整的地图 API</p></div>;
   if (mapStatus === 'error') return <div className="w-full aspect-square bg-red-50 border-2 border-dashed border-red-200 rounded-3xl flex flex-col items-center justify-center p-6 text-center shadow-inner mb-6"><AlertCircle size={32} className="text-red-300 mb-3" /><p className="text-sm font-bold text-red-500 mb-1">地图加载失败</p><p className="text-[10px] text-red-400">{mapErrorMsg}</p></div>;
 
   return (
-    <div className="w-full aspect-square min-h-[300px] rounded-3xl shadow-inner mb-6 overflow-hidden relative" style={{ backgroundColor: COLORS.light }}>
+    <div className={`w-full min-h-[300px] overflow-hidden relative ${className} ${heightClassName}`.trim()} style={{ backgroundColor: COLORS.light }}>
       <div ref={containerRef} className="w-full h-full" />
     </div>
   );
@@ -375,7 +418,13 @@ export default function App() {
   const [aiConversation, setAiConversation] = useState([]);
   const [aiProposal, setAiProposal] = useState(null);
   const [aiDraftStayMinutesByPlace, setAiDraftStayMinutesByPlace] = useState({});
-  const [dayStartAt] = useState(localStorage.getItem('travel_day_start_at') || '10:00');
+  const [dayStartTimes, setDayStartTimes] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('travel_day_start_times') || '{}');
+    } catch {
+      return {};
+    }
+  });
 
   const [favSearchQuery, setFavSearchQuery] = useState('');
   const [routeBuilderStart, setRouteBuilderStart] = useState(null);
@@ -393,8 +442,24 @@ export default function App() {
   const [segmentModes, setSegmentModes] = useState([]); 
   const [segmentRoutes, setSegmentRoutes] = useState([]); 
   const [, setIsCalculatingSegments] = useState(false);
-  const [stayMinutesByPlace, setStayMinutesByPlace] = useState({});
+  const [stayMinutesByPlace, setStayMinutesByPlace] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('travel_stay_minutes') || '{}');
+    } catch {
+      return {};
+    }
+  });
   const [currentRouteDay, setCurrentRouteDay] = useState(1);
+  const [arrivalOverridesByPlace, setArrivalOverridesByPlace] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('travel_arrival_overrides') || '{}');
+    } catch {
+      return {};
+    }
+  });
+  const [itinerarySearchQuery, setItinerarySearchQuery] = useState('');
+  const [itinerarySearchResults, setItinerarySearchResults] = useState([]);
+  const [isSearchingItinerary, setIsSearchingItinerary] = useState(false);
   const [lockMapViewport] = useState(true);
   const [mapView, setMapView] = useState(() => {
     try {
@@ -426,13 +491,16 @@ export default function App() {
   const aiRequestingRef = useRef(false);
   const routeCacheRef = useRef(new Map());
   const searchRequestRef = useRef(0);
+  const itinerarySearchRequestRef = useRef(0);
 
   // --- 本地缓存备份 ---
   useEffect(() => { localStorage.setItem('travel_saved_places', JSON.stringify(savedPlaces)); }, [savedPlaces]);
   useEffect(() => { localStorage.setItem('travel_trips', JSON.stringify(trips)); }, [trips]);
   useEffect(() => { localStorage.setItem('travel_memos', JSON.stringify(globalMemos)); }, [globalMemos]);
   useEffect(() => { localStorage.setItem('travel_memo_template', JSON.stringify(memoTemplate)); }, [memoTemplate]);
-  useEffect(() => { localStorage.setItem('travel_day_start_at', dayStartAt); }, [dayStartAt]);
+  useEffect(() => { localStorage.setItem('travel_day_start_times', JSON.stringify(dayStartTimes)); }, [dayStartTimes]);
+  useEffect(() => { localStorage.setItem('travel_stay_minutes', JSON.stringify(stayMinutesByPlace)); }, [stayMinutesByPlace]);
+  useEffect(() => { localStorage.setItem('travel_arrival_overrides', JSON.stringify(arrivalOverridesByPlace)); }, [arrivalOverridesByPlace]);
   useEffect(() => { localStorage.setItem('travel_map_view', JSON.stringify(mapView)); }, [mapView]);
   useEffect(() => { localStorage.setItem('travel_route_map_view', JSON.stringify(routeMapView)); }, [routeMapView]);
   useEffect(() => { localStorage.setItem('travel_collapsed_cities', JSON.stringify(collapsedCities)); }, [collapsedCities]);
@@ -650,6 +718,82 @@ export default function App() {
     };
   }, [searchQuery, mapStatus, currentCity]);
 
+  useEffect(() => {
+    const requestId = ++itinerarySearchRequestRef.current;
+    const timer = setTimeout(async () => {
+      const term = safeStr(itinerarySearchQuery).trim();
+      if (!term || !showRoutePanel) {
+        if (itinerarySearchRequestRef.current === requestId) {
+          setItinerarySearchResults([]);
+          setIsSearchingItinerary(false);
+        }
+        return;
+      }
+      setIsSearchingItinerary(true);
+      try {
+        const mergedResults = [];
+        const seen = new Set();
+        const append = (item) => {
+          if (!item) return;
+          const key = `${safeStr(item.name)}|${safeStr(item.address)}|${safeStr(item.location?.lng)}|${safeStr(item.location?.lat)}`;
+          if (seen.has(key)) return;
+          seen.add(key);
+          mergedResults.push(item);
+        };
+        await Promise.allSettled([
+          new Promise((resolve) => {
+            if (!window.AMap?.InputTips) return resolve();
+            const inputTips = new window.AMap.InputTips({
+              city: isNationwideCity(currentCity) ? '全国' : currentCity,
+              citylimit: false,
+            });
+            inputTips.search(term, (status, result) => {
+              const tips = status === 'complete' ? (result?.tips || []) : [];
+              tips.forEach((tip) => append(tip));
+              resolve();
+            });
+          }),
+          new Promise((resolve) => {
+            if (!window.AMap?.PlaceSearch) return resolve();
+            const placeSearch = new window.AMap.PlaceSearch({
+              city: isNationwideCity(currentCity) ? '全国' : currentCity,
+              citylimit: false,
+              pageSize: 20,
+              extensions: 'all',
+            });
+            placeSearch.search(term, (status, result) => {
+              const pois = status === 'complete' ? (result?.poiList?.pois || []) : [];
+              pois.forEach((poi) => append({
+                id: safeStr(poi.id) || `${safeStr(poi.name)}_${safeStr(poi.location?.lng)}_${safeStr(poi.location?.lat)}`,
+                name: safeStr(poi.name),
+                address: safeStr(poi.address),
+                district: `${safeStr(poi.pname)}${safeStr(poi.cityname)}${safeStr(poi.adname)}`,
+                category: safeStr(poi.type),
+                location: poi.location ? { lng: poi.location.lng, lat: poi.location.lat } : null,
+                city: safeStr(poi.cityname),
+              }));
+              resolve();
+            });
+          }),
+        ]);
+        const results = mergedResults.slice(0, 20);
+        if (itinerarySearchRequestRef.current === requestId) {
+          setItinerarySearchResults(results);
+        }
+      } catch (error) {
+        console.error('Itinerary search error', error);
+        if (itinerarySearchRequestRef.current === requestId) {
+          setItinerarySearchResults([]);
+        }
+      } finally {
+        if (itinerarySearchRequestRef.current === requestId) {
+          setIsSearchingItinerary(false);
+        }
+      }
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [itinerarySearchQuery, showRoutePanel, currentCity, mapStatus]);
+
   // ==========================================
   // AI 核心调用逻辑
   // ==========================================
@@ -815,7 +959,7 @@ export default function App() {
       })),
       currentTrip: activeTripId ? (trips.find((trip) => trip.id === activeTripId) || null) : null,
       preferences: {
-        dayStartAt,
+        dayStartAt: '10:00',
         targetStopsPerDay: 6
       }
     });
@@ -856,20 +1000,25 @@ export default function App() {
     activeTripId ? normalizeTrip(trips.find((trip) => trip.id === activeTripId)) : null
   ), [activeTripId, trips]);
   const routeDayCount = Math.max(1, activeTrip?.days?.length || 1);
-  const tripPlaces = useMemo(() => (
-    showRoutePanel && activeTrip
-      ? flattenTripPlaceIds(activeTrip).map((pid) => savedPlaces.find((p) => p.id === pid)).filter(Boolean)
-      : []
-  ), [activeTrip, savedPlaces, showRoutePanel]);
-  const tripPlaceIds = useMemo(() => tripPlaces.map(p => p.id).join(','), [tripPlaces]);
 
   useEffect(() => {
     setCurrentRouteDay((prev) => Math.min(Math.max(1, prev), routeDayCount));
   }, [routeDayCount, activeTripId]);
 
+  useEffect(() => {
+    setItinerarySearchQuery('');
+    setItinerarySearchResults([]);
+    setIsSearchingItinerary(false);
+  }, [activeTripId, currentRouteDay, showRoutePanel]);
+
   // 获取分段路线详情（独立计算每一段的出行方式）
   useEffect(() => {
-    if (!window.AMap || tripPlaces.length < 2 || !showRoutePanel) {
+    const dayPlaces = activeTrip?.days?.[Math.max(0, currentRouteDay - 1)]?.places || [];
+    const currentDayTripPlaces = dayPlaces
+      .map((pid) => savedPlaces.find((p) => p.id === pid))
+      .filter(Boolean);
+    const currentDayTripPlaceIds = currentDayTripPlaces.map((place) => place.id).join(',');
+    if (!window.AMap || currentDayTripPlaces.length < 2 || !showRoutePanel) {
       setSegmentRoutes([]);
       return;
     }
@@ -878,7 +1027,7 @@ export default function App() {
     setIsCalculatingSegments(true);
 
     const fetchSegments = async () => {
-      const cacheKey = `${tripPlaceIds}__${JSON.stringify(segmentModes)}__${currentCity}`;
+      const cacheKey = `${currentDayTripPlaceIds}__${JSON.stringify(segmentModes)}__${currentCity}`;
       const cached = routeCacheRef.current.get(cacheKey);
       if (cached) {
         setSegmentRoutes(cached);
@@ -886,9 +1035,9 @@ export default function App() {
         return;
       }
       const results = [];
-      for (let i = 0; i < tripPlaces.length - 1; i++) {
-         const p1 = tripPlaces[i];
-         const p2 = tripPlaces[i+1];
+      for (let i = 0; i < currentDayTripPlaces.length - 1; i++) {
+         const p1 = currentDayTripPlaces[i];
+         const p2 = currentDayTripPlaces[i+1];
          const start = getLngLat(p1.location);
          const end = getLngLat(p2.location);
          
@@ -912,31 +1061,36 @@ export default function App() {
   
              if (searcher) {
                searcher.search(start, end, (status, result) => {
-                  try {
+                 try {
                     if (status === 'complete') {
-                       let distance = 0, time = 0;
+                       let distance = 0, time = 0, path = [];
                        if (currentMode === 'transit' && result.plans && result.plans.length > 0) {
                           distance = result.plans[0].distance;
                           time = result.plans[0].time;
+                          path = (result.plans[0].segments || []).flatMap((seg) => [
+                            ...(seg.walking?.steps || []).flatMap((step) => step.path || []),
+                            ...(seg.transit?.lines || []).flatMap((line) => line.path || []),
+                          ]);
                        } else if (result.routes && result.routes.length > 0) {
                           distance = result.routes[0].distance;
                           time = result.routes[0].time;
+                          path = (result.routes[0].steps || []).flatMap((step) => step.path || []);
                        }
-                       resolve({ distance, time });
+                       resolve({ distance, time, path: path.length >= 2 ? path : [start, end] });
                     } else {
                        const dist = window.AMap.GeometryUtil.distance(start, end);
                        const speed = currentMode === 'walking' ? 1.2 : currentMode === 'riding' ? 4 : 10;
-                       resolve({ distance: dist, time: dist / speed });
+                       resolve({ distance: dist, time: dist / speed, path: [start, end] });
                     }
                   } catch {
-                    resolve({ distance: 0, time: 0 });
+                    resolve({ distance: 0, time: 0, path: [start, end] });
                   }
                });
              } else {
-               resolve({ distance: 0, time: 0 });
+               resolve({ distance: 0, time: 0, path: [start, end] });
              }
            } catch {
-             resolve({ distance: 0, time: 0 });
+             resolve({ distance: 0, time: 0, path: [start, end] });
            }
          });
          results.push(res);
@@ -949,7 +1103,7 @@ export default function App() {
     };
     fetchSegments();
     return () => { canceled = true; };
-  }, [tripPlaceIds, tripPlaces, segmentModes, currentCity, mapStatus, showRoutePanel]);
+  }, [activeTrip, currentRouteDay, savedPlaces, segmentModes, currentCity, mapStatus, showRoutePanel]);
 
   const handleSegmentModeChange = (index, newMode) => {
     routeCacheRef.current.clear();
@@ -961,18 +1115,20 @@ export default function App() {
   };
 
   const setAllSegmentModes = (mode) => {
-    const newModes = new Array(Math.max(0, tripPlaces.length - 1)).fill(mode);
+    const size = Math.max(0, (activeTrip?.days?.[Math.max(0, currentRouteDay - 1)]?.places || []).length - 1);
+    const newModes = new Array(size).fill(mode);
     setSegmentModes(newModes);
   };
   void setAllSegmentModes;
 
   useEffect(() => {
     setSegmentModes((prev) => {
-      const size = Math.max(0, tripPlaces.length - 1);
+      const dayPlaces = activeTrip?.days?.[Math.max(0, currentRouteDay - 1)]?.places || [];
+      const size = Math.max(0, dayPlaces.length - 1);
       const next = new Array(size).fill('driving').map((mode, index) => prev[index] || mode);
       return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
     });
-  }, [tripPlaceIds, tripPlaces.length]);
+  }, [activeTrip, currentRouteDay]);
 
   // ==========================================
   // 浜戠鍚屾鍐欐搷浣滈€昏緫
@@ -1112,6 +1268,36 @@ export default function App() {
     }
 
     return { address: normalizeAddressText(placeData), district: safeStr(placeData?.district) };
+  };
+
+  const createSavedPlaceFromSource = async (placeData) => {
+    const placeName = safeStr(placeData?.name) || '未知地点';
+    const inferredCity = inferCityName(placeData, currentCity);
+    const resolvedAddress = await resolveAddressForPlace(placeData);
+    const dedupeKey = placeIdentityKey(placeData, currentCity);
+    const existingByKey = savedPlaces.find((place) => placeIdentityKey(place, inferredCity) === dedupeKey);
+    const newPlace = {
+      id: existingByKey?.id || placeData?.id || Date.now().toString(),
+      name: placeName,
+      location: placeData?.location,
+      category: safeStr(placeData?.category) || '景点',
+      address: safeStr(resolvedAddress.address) || normalizeAddressText(placeData),
+      district: safeStr(resolvedAddress.district) || safeStr(placeData?.district) || safeStr(existingByKey?.district) || '',
+      city: inferredCity,
+      savedAt: existingByKey?.savedAt || Date.now(),
+    };
+    setSavedPlaces((prev) => {
+      const filtered = prev.filter((p) => placeIdentityKey(p, newPlace.city) !== dedupeKey && p.id !== newPlace.id);
+      return [newPlace, ...filtered];
+    });
+    if (user && !user.is_anonymous && supabase) {
+      try {
+        await supabase.from('places').upsert({ ...newPlace, user_id: user.id });
+      } catch (e) {
+        logCloudError('Save place from itinerary', e);
+      }
+    }
+    return newPlace;
   };
 
   const createTrip = async (newTrip) => {
@@ -1362,7 +1548,12 @@ export default function App() {
       )),
     }));
   };
-  void addPlaceToActiveTrip;
+
+  const addPlaceObjectToActiveTrip = async (placeData) => {
+    if (!activeTripId) return;
+    const savedPlace = await createSavedPlaceFromSource(placeData);
+    await addPlaceToActiveTrip(savedPlace.id);
+  };
 
   const movePlaceToTripDay = async (placeId, targetDay) => {
     if (!activeTripId) return;
@@ -1393,6 +1584,19 @@ export default function App() {
       }
     }
     return updatedTrip;
+  };
+
+  const handleRouteMapClickAdd = async (event) => {
+    if (!activeTripId || !event?.lnglat) return;
+    await addPlaceObjectToActiveTrip({
+      id: `map_pick_${Date.now()}`,
+      name: '地图选点',
+      location: { lng: event.lnglat.lng, lat: event.lnglat.lat },
+      district: '',
+      address: '地图标记地点',
+      city: currentCity,
+      category: '地图选点',
+    });
   };
 
   const filteredFavs = savedPlaces.filter(p => 
@@ -1488,18 +1692,29 @@ export default function App() {
   const totalTime = segmentRoutes.reduce((acc, curr) => acc + (curr?.time || 0), 0);
   void totalDist;
   void totalTime;
+  const dayStorageKey = `${safeStr(activeTripId) || 'default'}::day_${currentRouteDay}`;
+  const currentDayPlaceIds = activeTrip?.days?.[currentRouteDay - 1]?.places || [];
+  const currentDayTripPlaces = currentDayPlaceIds
+    .map((pid) => savedPlaces.find((place) => place.id === pid))
+    .filter(Boolean);
   const timelineRows = (() => {
+    const dayStartAt = safeStr(dayStartTimes[dayStorageKey]) || '10:00';
     const initialMinute = toMinute(dayStartAt);
-    const result = tripPlaces.reduce((accumulator, place, index) => {
+    const result = currentDayTripPlaces.reduce((accumulator, place, index) => {
       const segment = index > 0 ? segmentRoutes[index - 1] : null;
       const transitMinute = index > 0 ? Math.max(0, Math.round((segment?.time || 0) / 60)) : 0;
-      const arriveMinute = accumulator.cursor + transitMinute;
+      const overrideMinute = Number(arrivalOverridesByPlace[`${dayStorageKey}::${place.id}`]);
+      const arriveMinute = index === 0
+        ? (Number.isFinite(overrideMinute) ? overrideMinute : initialMinute)
+        : (Number.isFinite(overrideMinute) ? overrideMinute : accumulator.cursor + transitMinute);
       const stayMinutes = Math.max(15, Number(stayMinutesByPlace[place.id]) || estimateStayMinutes(place));
       const leaveMinute = arriveMinute + stayMinutes;
       accumulator.rows.push({
         id: place.id || `${index}`,
         place,
+        arriveMinute,
         arriveAt: toTimeText(arriveMinute),
+        leaveMinute,
         leaveAt: toTimeText(leaveMinute),
         stayMinutes,
         transitMinute
@@ -1511,14 +1726,15 @@ export default function App() {
   })();
   const totalDays = routeDayCount;
   const dayOptions = Array.from({ length: totalDays }, (_, idx) => idx + 1);
-  const currentDayPlaceIds = activeTrip?.days?.[currentRouteDay - 1]?.places || [];
-  const currentDayRows = timelineRows.filter((row) => currentDayPlaceIds.includes(row.place.id));
+  const currentDayRows = timelineRows;
   const currentDayTransitMinutes = currentDayRows.reduce((sum, row) => sum + (row.transitMinute || 0), 0);
   const currentDayStayMinutes = currentDayRows.reduce((sum, row) => sum + (row.stayMinutes || 0), 0);
+  const currentDayTotalMinutes = currentDayTransitMinutes + currentDayStayMinutes;
+  const currentDayStartAt = safeStr(dayStartTimes[dayStorageKey]) || '10:00';
 
   return (
-    <div className="min-h-[100dvh] w-full flex justify-center bg-gray-100 sm:bg-[#f0f4f8]">
-      <div className="w-full sm:max-w-md h-[100dvh] flex flex-col relative bg-white overflow-hidden shadow-2xl min-h-0">
+    <div className="min-h-[100dvh] w-full flex justify-center bg-gray-100 sm:bg-[#f0f4f8]" style={{ fontFamily: '"PingFang SC","Hiragino Sans GB","Noto Sans SC","Microsoft YaHei",sans-serif' }}>
+      <div className="w-full sm:max-w-[960px] h-[100dvh] flex flex-col relative bg-white overflow-hidden shadow-2xl min-h-0">
         
         <div className="absolute top-0 w-full h-40" style={{ background: `linear-gradient(to bottom, ${COLORS.bg}, white)` }}></div>
         <div className="h-12 shrink-0 pt-safe z-10"></div>
@@ -1529,7 +1745,7 @@ export default function App() {
           {activeTab === 'map' && (
             <div className="flex-1 flex flex-col animate-in fade-in min-h-0">
               <div className="px-6 shrink-0">
-                {!isSearching && <h2 className="text-2xl font-bold mb-4" style={{ color: COLORS.textDark }}>发现地点</h2>}
+                {!isSearching && <h2 className="text-[28px] sm:text-[30px] leading-none font-bold mb-4" style={{ color: COLORS.textDark }}>发现地点</h2>}
                 
                 <div className="flex items-center gap-3 mb-6">
                   {isSearching ? (
@@ -1612,6 +1828,8 @@ export default function App() {
                       mapView={mapView}
                       onMapViewChange={setMapView}
                       onMarkerClick={(p) => setSelectedPlace(p)}
+                      className="rounded-[32px] shadow-inner"
+                      heightClassName="h-[360px] sm:h-[420px]"
                     />
                     {savedPlaces.length === 0 && mapStatus === 'success' && (
                       <div className="bg-white p-4 rounded-2xl text-center text-xs text-slate-500 shadow-sm flex items-center justify-center gap-2">
@@ -1627,8 +1845,8 @@ export default function App() {
           {/* ==================== 鏀惰棌澶归〉闈?==================== */}
           {activeTab === 'favorites' && (
             <div className="h-full flex flex-col animate-in fade-in bg-[#f0f4f8] min-h-0 overflow-x-hidden">
-               <div className="px-6 pt-5 pb-3 bg-white shadow-sm z-10 shrink-0">
-                 <h2 className="text-2xl font-bold">我的收藏</h2>
+               <div className="px-6 pt-5 pb-3 bg-white shadow-sm z-10 shrink-0 overflow-x-hidden">
+                 <h2 className="text-[22px] sm:text-[24px] leading-tight font-semibold tracking-[0.01em] text-slate-800">我的收藏</h2>
                  <div className="relative mt-4">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
                     <input 
@@ -1641,9 +1859,9 @@ export default function App() {
                  </div>
                </div>
                
-               <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6 pb-24 min-h-0">
+               <div className="flex-1 overflow-y-auto overflow-x-hidden px-6 py-4 space-y-6 pb-24 min-h-0">
                   {Object.keys(groupedFavorites).map(city => (
-                    <div key={city} className="space-y-3">
+                    <div key={city} className="space-y-3 overflow-x-hidden">
                       <div className="flex items-center justify-between border-b border-gray-200 pb-1">
                         <h3 className="font-bold text-lg text-slate-800">{city}</h3>
                         <button
@@ -1653,17 +1871,17 @@ export default function App() {
                           {collapsedCities[city] ? '展开' : '收起'}
                         </button>
                       </div>
-                      {!collapsedCities[city] ? <div className="grid gap-3">
+                      {!collapsedCities[city] ? <div className="grid gap-3 overflow-x-hidden">
                         {groupedFavorites[city].map(spot => (
                           <div 
                             key={spot.id} 
                             onClick={() => { setRouteBuilderStart(spot); setRouteBuilderTargets([]); }}
-                            className="bg-white p-4 rounded-2xl shadow-sm border border-gray-50 flex justify-between items-center cursor-pointer active:scale-95 transition-transform"
+                            className="bg-white p-4 rounded-2xl shadow-sm border border-gray-50 flex justify-between items-start cursor-pointer active:scale-95 transition-transform max-w-full overflow-hidden"
                           >
                             <div className="flex-1 min-w-0 pr-4">
-                              <p className="font-bold text-slate-700 truncate">{safeStr(spot.name)}</p>
-                              <p className="text-[11px] text-slate-400 truncate flex items-center gap-1 mt-1">
-                                <MapPin size={10} /> {safeStr(spot.address)}
+                              <p className="font-bold text-slate-700 break-words leading-snug">{safeStr(spot.name)}</p>
+                              <p className="text-[11px] leading-5 text-slate-400 break-words flex items-start gap-1 mt-1 max-w-full">
+                                <MapPin size={10} className="mt-[3px] shrink-0" /> <span className="min-w-0 break-words">{normalizeAddressText(spot)}</span>
                               </p>
                             </div>
                             <button onClick={(e) => { e.stopPropagation(); removePlace(spot.id); }} className="text-slate-300 hover:text-red-400 p-2 rounded-full hover:bg-red-50 transition-colors">
@@ -1688,7 +1906,7 @@ export default function App() {
           {activeTab === 'lists' && (
             <div className="h-full flex flex-col px-6 animate-in fade-in min-h-0">
                <div className="flex justify-between items-center py-4 shrink-0">
-                  <h2 className="text-2xl font-bold">我的行程</h2>
+                  <h2 className="text-[22px] sm:text-[24px] font-semibold text-slate-800">我的行程</h2>
                   <button onClick={() => setNewTripModalVisible(true)} className="w-10 h-10 rounded-full flex items-center justify-center bg-white shadow-sm active:scale-95"><Plus size={20} color={COLORS.primary}/></button>
                </div>
                <div className="flex-1 overflow-y-auto pb-24 space-y-4 pt-2 min-h-0">
@@ -2085,25 +2303,40 @@ export default function App() {
         {/* ==================================================== */}
         {showRoutePanel && activeTripId && (
           <div className="fixed inset-0 z-[120] flex flex-col bg-slate-50 min-h-0">
-            <div className="px-6 py-5 flex items-center justify-between border-b border-slate-100 shrink-0 bg-white">
-              <h2 className="text-2xl font-black text-slate-800">行程规划与地图</h2>
+            <div className="px-5 sm:px-6 py-4 flex items-center justify-between border-b border-slate-100 shrink-0 bg-white">
+              <h2 className="text-[20px] sm:text-[24px] leading-tight font-semibold text-slate-800">行程规划与地图</h2>
               <button onClick={() => setShowRoutePanel(false)} className="p-2 rounded-full bg-slate-100"><X size={20} /></button>
             </div>
-            <div className="flex-1 overflow-hidden">
-              <div className="flex flex-col h-full overflow-hidden mx-3 my-3 bg-slate-50 rounded-[28px]">
-                <div className="relative h-[26%] min-h-[154px] bg-slate-200 shrink-0 rounded-[24px] overflow-hidden border border-slate-200">
-                  <RealMap places={tripPlaces} isRoute={true} mapStatus={mapStatus} currentCity={currentCity} lockViewport={lockMapViewport} mapView={routeMapView} onMapViewChange={setRouteMapView} routeModes={segmentModes} />
+            <div className="flex-1 overflow-y-auto overscroll-y-contain">
+              <div className="mx-auto w-full max-w-[960px] px-3 sm:px-5 py-3 sm:py-4">
+                <div className="sticky top-0 z-20 pb-3 bg-slate-50">
+                  <div className="relative bg-slate-200 rounded-[28px] overflow-hidden border border-slate-200 shadow-[0_10px_24px_rgba(15,23,42,0.08)]">
+                    <RealMap
+                      places={currentDayTripPlaces}
+                      isRoute={true}
+                      mapStatus={mapStatus}
+                      currentCity={currentCity}
+                      lockViewport={lockMapViewport}
+                      mapView={routeMapView}
+                      onMapViewChange={setRouteMapView}
+                      routeSegments={segmentRoutes}
+                      onMapClick={handleRouteMapClickAdd}
+                      className="rounded-[28px]"
+                      heightClassName="h-[280px] sm:h-[360px] lg:h-[400px]"
+                    />
+                    <div className="pointer-events-none absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-black/20 to-transparent" />
+                  </div>
                 </div>
-                <div className="flex-1 flex flex-col relative bg-white rounded-[24px] mt-2 z-20 shadow-[0_8px_28px_rgba(0,0,0,0.06)] overflow-hidden border border-slate-100">
-                  <div className="px-5 pt-5 pb-3 shrink-0 border-b border-slate-100">
+                <div className="bg-white rounded-[28px] shadow-[0_12px_30px_rgba(15,23,42,0.06)] border border-slate-100 overflow-hidden">
+                  <div className="px-4 sm:px-5 pt-4 pb-3 border-b border-slate-100 bg-white">
                     <div className="flex items-center justify-between">
-                    <button onClick={() => setCurrentRouteDay((d) => Math.max(1, d - 1))} className={`p-2 rounded-full ${currentRouteDay === 1 ? 'opacity-10 pointer-events-none' : 'text-slate-400 hover:bg-slate-100'}`}><ChevronLeft size={24} /></button>
+                    <button onClick={() => setCurrentRouteDay((d) => Math.max(1, d - 1))} className={`p-2 rounded-full ${currentRouteDay === 1 ? 'opacity-10 pointer-events-none' : 'text-slate-400 hover:bg-slate-100'}`}><ChevronLeft size={22} /></button>
                     <div className="text-center">
                       <span className="block text-[10px] font-black tracking-[0.25em] mb-1 uppercase" style={{ color: COLORS.primary }}>Itinerary</span>
-                      <h2 className="font-black text-lg text-slate-800 max-w-[180px] truncate">{safeStr(activeTrip?.name) || `Day ${currentRouteDay}`}</h2>
-                      <p className="text-[11px] text-slate-400 mt-1">第 {currentRouteDay} 天 / 共 {totalDays} 天</p>
+                      <h2 className="font-semibold text-base sm:text-lg text-slate-800 max-w-[220px] sm:max-w-[360px] truncate">{safeStr(activeTrip?.name) || `Day ${currentRouteDay}`}</h2>
+                      <p className="text-[11px] sm:text-xs text-slate-400 mt-1">第 {currentRouteDay} 天 / 共 {totalDays} 天</p>
                     </div>
-                    <button onClick={() => setCurrentRouteDay((d) => Math.min(totalDays, d + 1))} className={`p-2 rounded-full ${currentRouteDay === totalDays ? 'opacity-10 pointer-events-none' : 'text-slate-400 hover:bg-slate-100'}`}><ChevronRight size={24} /></button>
+                    <button onClick={() => setCurrentRouteDay((d) => Math.min(totalDays, d + 1))} className={`p-2 rounded-full ${currentRouteDay === totalDays ? 'opacity-10 pointer-events-none' : 'text-slate-400 hover:bg-slate-100'}`}><ChevronRight size={22} /></button>
                     </div>
                     <div className="mt-3 flex items-center gap-2 overflow-x-auto hide-scrollbar">
                       {dayOptions.map((d) => (
@@ -2124,15 +2357,61 @@ export default function App() {
                       </div>
                       <div className="rounded-2xl bg-slate-50 px-3 py-2 text-center">
                         <div className="text-[10px] font-bold text-slate-400">停留</div>
-                        <div className="text-sm font-black text-slate-700">{currentDayStayMinutes} 分</div>
+                        <div className="text-[13px] sm:text-sm font-black text-slate-700">{formatDurationCn(currentDayStayMinutes)}</div>
                       </div>
                       <div className="rounded-2xl bg-slate-50 px-3 py-2 text-center">
                         <div className="text-[10px] font-bold text-slate-400">路程</div>
-                        <div className="text-sm font-black text-slate-700">{currentDayTransitMinutes} 分</div>
+                        <div className="text-[13px] sm:text-sm font-black text-slate-700">{formatDurationCn(currentDayTransitMinutes)}</div>
+                      </div>
+                    </div>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(180px,220px)_1fr]">
+                      <label className="rounded-2xl bg-slate-50 px-3 py-2">
+                        <div className="text-[10px] font-bold text-slate-400 mb-1">当天开始时间</div>
+                        <input
+                          type="time"
+                          value={currentDayStartAt}
+                          onChange={(event) => setDayStartTimes((prev) => ({ ...prev, [dayStorageKey]: event.target.value || '10:00' }))}
+                          className="w-full bg-transparent text-sm font-semibold text-slate-700 outline-none"
+                        />
+                      </label>
+                      <div className="rounded-2xl bg-slate-50 px-3 py-2">
+                        <div className="text-[10px] font-bold text-slate-400 mb-1">继续添加地点</div>
+                        <div className="relative">
+                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+                          <input
+                            value={itinerarySearchQuery}
+                            onChange={(event) => setItinerarySearchQuery(event.target.value)}
+                            placeholder="搜索高德地点并加入当前 Day"
+                            className="w-full pl-9 pr-4 py-2 rounded-xl border border-slate-200 bg-white text-sm outline-none"
+                          />
+                        </div>
+                        {itinerarySearchQuery.trim() ? (
+                          <div className="mt-2 max-h-44 overflow-y-auto space-y-2 pr-1">
+                            {isSearchingItinerary ? <p className="text-xs text-slate-400 py-2">搜索中...</p> : null}
+                            {!isSearchingItinerary && itinerarySearchResults.length === 0 ? <p className="text-xs text-slate-400 py-2">没有找到可加入的地点</p> : null}
+                            {itinerarySearchResults.map((result) => (
+                              <button
+                                key={`route_search_${safeStr(result.id) || placeIdentityKey(result, currentCity)}`}
+                                type="button"
+                                onClick={async () => {
+                                  await addPlaceObjectToActiveTrip(result);
+                                  setItinerarySearchQuery('');
+                                  setItinerarySearchResults([]);
+                                }}
+                                className="w-full text-left rounded-2xl border border-slate-200 bg-white px-3 py-2"
+                              >
+                                <p className="text-sm font-semibold text-slate-700 break-words">{safeStr(result.name)}</p>
+                                <p className="text-[11px] text-slate-400 mt-1 break-words">{normalizeAddressText(result)}</p>
+                              </button>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="mt-2 text-[11px] text-slate-400">也支持直接点击上方地图，把当前位置加入这一天。</p>
+                        )}
                       </div>
                     </div>
                   </div>
-                  <main className="flex-1 overflow-y-auto px-4 pt-3 pb-20 hide-scrollbar">
+                  <main className="px-4 sm:px-5 pt-3 pb-8">
                     <div className="space-y-3">
                       {currentDayRows.length === 0 ? (
                         <div className="rounded-[24px] border border-dashed border-slate-200 bg-slate-50 px-5 py-10 text-center">
@@ -2151,16 +2430,16 @@ export default function App() {
                               <div className="flex gap-3 min-w-0">
                                 <div className="w-7 h-10 rounded-[14px] shrink-0 text-white flex items-start justify-center pt-2" style={{ backgroundColor: COLORS.primary }}><MapPin size={11} /></div>
                                 <div className="flex flex-col gap-1 min-w-0">
-                                  <h3 className="font-bold text-slate-800 text-[13px] truncate">{safeStr(row.place.name)}</h3>
-                                  <div className="text-[9px] text-slate-400 truncate">{normalizeAddressText(row.place)}</div>
+                                  <h3 className="font-bold text-slate-800 text-[13px] break-words leading-snug">{safeStr(row.place.name)}</h3>
+                                  <div className="text-[10px] leading-4 text-slate-400 break-words">{normalizeAddressText(row.place)}</div>
                                   <div className="flex items-center flex-wrap gap-1.5 text-slate-400 mt-1">
                                     <div className="flex items-center gap-1 rounded-full bg-slate-50 border border-slate-100 px-2 py-1">
                                       <Clock size={14} />
                                       <span className="text-[10px]">停留</span>
-                                      <input type="number" min={15} step={5} value={Number(stayMinutesByPlace[row.place.id]) || row.stayMinutes} onChange={(event) => setStayMinutesByPlace((prev) => ({ ...prev, [row.place.id]: Math.max(15, Number(event.target.value) || 15) }))} className="w-12 bg-white text-slate-700 font-bold outline-none text-[10px] px-1 rounded border border-slate-200" />
-                                      <span className="text-[10px]">分</span>
+                                      <input type="number" min={15} step={5} value={Number(stayMinutesByPlace[row.place.id]) || row.stayMinutes} onChange={(event) => setStayMinutesByPlace((prev) => ({ ...prev, [row.place.id]: Math.max(15, Number(event.target.value) || 15) }))} className="w-14 bg-white text-slate-700 font-bold outline-none text-[10px] px-1 rounded border border-slate-200" />
+                                      <span className="text-[10px]">{formatDurationCn(Number(stayMinutesByPlace[row.place.id]) || row.stayMinutes)}</span>
                                     </div>
-                                    {rowIndex > 0 ? <div className="text-[10px] px-2 py-1 rounded-full bg-slate-50 border border-slate-100 text-slate-500">{modeLabel} · {transitMinute} 分</div> : null}
+                                    {rowIndex > 0 ? <div className="text-[10px] px-2 py-1 rounded-full bg-slate-50 border border-slate-100 text-slate-500">{modeLabel} · {formatDurationCn(transitMinute)}</div> : null}
                                   </div>
                                 </div>
                               </div>
@@ -2176,8 +2455,16 @@ export default function App() {
                                 </select>
                               </div>
                             </div>
-                            <div className="flex items-center justify-between mt-5 pt-4 border-t border-dashed border-slate-100">
-                              <div className="flex flex-col"><span className="text-[9px] text-slate-400 font-black uppercase">Arrival</span><span className="text-sm font-black text-slate-700">{row.arriveAt}</span></div>
+                            <div className="flex items-center justify-between mt-5 pt-4 border-t border-dashed border-slate-100 gap-3">
+                              <div className="flex flex-col">
+                                <span className="text-[9px] text-slate-400 font-black uppercase">Arrival</span>
+                                <input
+                                  type="time"
+                                  value={row.arriveAt}
+                                  onChange={(event) => setArrivalOverridesByPlace((prev) => ({ ...prev, [`${dayStorageKey}::${row.place.id}`]: toMinute(event.target.value) }))}
+                                  className="text-sm font-black text-slate-700 bg-transparent outline-none"
+                                />
+                              </div>
                               <div className="flex-1 mx-6 h-1 bg-slate-50 rounded-full relative"><div className="absolute top-0 left-0 h-full w-1/3 rounded-full" style={{ backgroundColor: COLORS.light }}></div></div>
                               <div className="flex flex-col text-right"><span className="text-[9px] text-slate-400 font-black uppercase">Leave</span><span className="text-sm font-black text-slate-700">{row.leaveAt}</span></div>
                             </div>
@@ -2186,13 +2473,13 @@ export default function App() {
                       })}
                     </div>
                   </main>
-                  <div className="px-6 py-4 bg-white/90 backdrop-blur-md border-t border-slate-50 text-center shrink-0">
+                  <div className="px-6 py-3 bg-white/90 backdrop-blur-md border-t border-slate-50 text-center shrink-0">
                     <div className="flex justify-center gap-2.5 mb-2">
                       {dayOptions.map((d) => (
                         <div key={`page_${d}`} onClick={() => setCurrentRouteDay(d)} className={`h-1.5 rounded-full transition-all duration-500 cursor-pointer ${currentRouteDay === d ? 'w-10 shadow-lg' : 'w-1.5 bg-slate-200'}`} style={currentRouteDay === d ? { backgroundColor: COLORS.primary } : {}} />
                       ))}
                     </div>
-                    <p className="text-[10px] text-slate-300 font-black uppercase tracking-[0.2em]">Use arrows or day tabs</p>
+                    <p className="text-[11px] text-slate-400">本日总时长 {formatDurationCn(currentDayTotalMinutes)}</p>
                   </div>
                 </div>
               </div>
