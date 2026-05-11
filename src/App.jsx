@@ -457,7 +457,7 @@ export default function App() {
       return {};
     }
   });
-  const [itinerarySearchQuery, setItinerarySearchQuery] = useState('');
+  const [itinerarySearchQuery, setItinerarySearchQuery] = useState(null);
   const [itinerarySearchResults, setItinerarySearchResults] = useState([]);
   const [isSearchingItinerary, setIsSearchingItinerary] = useState(false);
   const [lockMapViewport] = useState(true);
@@ -2350,42 +2350,36 @@ export default function App() {
                         </button>
                       ))}
                     </div>
-                    <div className="mt-3 grid grid-cols-3 gap-2">
-                      <div className="rounded-2xl bg-slate-50 px-3 py-2 text-center">
-                        <div className="text-[10px] font-bold text-slate-400">地点</div>
-                        <div className="text-sm font-black text-slate-700">{currentDayRows.length}</div>
-                      </div>
-                      <div className="rounded-2xl bg-slate-50 px-3 py-2 text-center">
-                        <div className="text-[10px] font-bold text-slate-400">停留</div>
-                        <div className="text-[13px] sm:text-sm font-black text-slate-700">{formatDurationCn(currentDayStayMinutes)}</div>
-                      </div>
-                      <div className="rounded-2xl bg-slate-50 px-3 py-2 text-center">
-                        <div className="text-[10px] font-bold text-slate-400">路程</div>
-                        <div className="text-[13px] sm:text-sm font-black text-slate-700">{formatDurationCn(currentDayTransitMinutes)}</div>
-                      </div>
+
+                    <div className="mt-3 flex items-center justify-between">
+                      <button
+                        type="button"
+                        onClick={() => setItinerarySearchQuery(itinerarySearchQuery === null ? '' : (itinerarySearchQuery === '' ? '\u200b' : itinerarySearchQuery))}
+                        className="flex items-center gap-2 px-4 py-2 rounded-2xl border border-slate-200 bg-slate-50 text-slate-500 text-xs font-bold hover:bg-slate-100 transition-colors"
+                        style={{ minWidth: 0 }}
+                        aria-label="添加地点"
+                      >
+                        <Search size={13} />
+                        <span>添加地点</span>
+                        <Plus size={13} />
+                      </button>
                     </div>
-                    <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(180px,220px)_1fr]">
-                      <label className="rounded-2xl bg-slate-50 px-3 py-2">
-                        <div className="text-[10px] font-bold text-slate-400 mb-1">当天开始时间</div>
-                        <input
-                          type="time"
-                          value={currentDayStartAt}
-                          onChange={(event) => setDayStartTimes((prev) => ({ ...prev, [dayStorageKey]: event.target.value || '10:00' }))}
-                          className="w-full bg-transparent text-sm font-semibold text-slate-700 outline-none"
-                        />
-                      </label>
-                      <div className="rounded-2xl bg-slate-50 px-3 py-2">
-                        <div className="text-[10px] font-bold text-slate-400 mb-1">继续添加地点</div>
+                    {itinerarySearchQuery !== null && (
+                      <div className="mt-2 rounded-2xl bg-slate-50 px-3 py-2">
                         <div className="relative">
                           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
                           <input
-                            value={itinerarySearchQuery}
+                            autoFocus
+                            value={itinerarySearchQuery === '\u200b' ? '' : itinerarySearchQuery}
                             onChange={(event) => setItinerarySearchQuery(event.target.value)}
                             placeholder="搜索高德地点并加入当前 Day"
-                            className="w-full pl-9 pr-4 py-2 rounded-xl border border-slate-200 bg-white text-sm outline-none"
+                            className="w-full pl-9 pr-9 py-2 rounded-xl border border-slate-200 bg-white text-sm outline-none"
                           />
+                          <button type="button" onClick={() => setItinerarySearchQuery(null)} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500">
+                            <X size={14} />
+                          </button>
                         </div>
-                        {itinerarySearchQuery.trim() ? (
+                        {(itinerarySearchQuery && itinerarySearchQuery !== '\u200b') ? (
                           <div className="mt-2 max-h-44 overflow-y-auto space-y-2 pr-1">
                             {isSearchingItinerary ? <p className="text-xs text-slate-400 py-2">搜索中...</p> : null}
                             {!isSearchingItinerary && itinerarySearchResults.length === 0 ? <p className="text-xs text-slate-400 py-2">没有找到可加入的地点</p> : null}
@@ -2395,7 +2389,7 @@ export default function App() {
                                 type="button"
                                 onClick={async () => {
                                   await addPlaceObjectToActiveTrip(result);
-                                  setItinerarySearchQuery('');
+                                  setItinerarySearchQuery(null);
                                   setItinerarySearchResults([]);
                                 }}
                                 className="w-full text-left rounded-2xl border border-slate-200 bg-white px-3 py-2"
@@ -2409,7 +2403,7 @@ export default function App() {
                           <p className="mt-2 text-[11px] text-slate-400">也支持直接点击上方地图，把当前位置加入这一天。</p>
                         )}
                       </div>
-                    </div>
+                    )}
                   </div>
                   <main className="px-4 sm:px-5 pt-3 pb-8">
                     <div className="space-y-3">
@@ -2436,8 +2430,7 @@ export default function App() {
                                     <div className="flex items-center gap-1 rounded-full bg-slate-50 border border-slate-100 px-2 py-1">
                                       <Clock size={14} />
                                       <span className="text-[10px]">停留</span>
-                                      <input type="number" min={15} step={5} value={Number(stayMinutesByPlace[row.place.id]) || row.stayMinutes} onChange={(event) => setStayMinutesByPlace((prev) => ({ ...prev, [row.place.id]: Math.max(15, Number(event.target.value) || 15) }))} className="w-14 bg-white text-slate-700 font-bold outline-none text-[10px] px-1 rounded border border-slate-200" />
-                                      <span className="text-[10px]">{formatDurationCn(Number(stayMinutesByPlace[row.place.id]) || row.stayMinutes)}</span>
+                                      <span className="text-[10px] font-bold text-slate-700">{formatDurationCn(Number(stayMinutesByPlace[row.place.id]) || row.stayMinutes)}</span>
                                     </div>
                                     {rowIndex > 0 ? <div className="text-[10px] px-2 py-1 rounded-full bg-slate-50 border border-slate-100 text-slate-500">{modeLabel} · {formatDurationCn(transitMinute)}</div> : null}
                                   </div>
