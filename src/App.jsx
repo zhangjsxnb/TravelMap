@@ -98,6 +98,14 @@ const formatDurationCn = (totalMinute) => {
   return `${hour}小时${minute}分`;
 };
 
+const splitDurationMinute = (totalMinute) => {
+  const safeMinute = Math.max(15, Math.round(Number(totalMinute) || 0));
+  return {
+    hour: Math.floor(safeMinute / 60),
+    minute: safeMinute % 60,
+  };
+};
+
 const estimateStayMinutes = (place) => {
   const name = safeStr(place?.name);
   const category = safeStr(place?.category);
@@ -680,7 +688,7 @@ export default function App() {
   const [segmentModes, setSegmentModes] = useState([]); 
   const [segmentRoutes, setSegmentRoutes] = useState([]); 
   const [, setIsCalculatingSegments] = useState(false);
-  const [stayMinutesByPlace] = useState(() => {
+  const [stayMinutesByPlace, setStayMinutesByPlace] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('travel_stay_minutes') || '{}');
     } catch {
@@ -1194,6 +1202,14 @@ export default function App() {
     setSegmentModes(newModes);
   };
   void setAllSegmentModes;
+
+  const updateStayMinutes = (placeId, nextMinute) => {
+    const normalizedMinute = Math.max(15, Math.min(24 * 60, Math.round(Number(nextMinute) || 0)));
+    setStayMinutesByPlace((prev) => ({
+      ...prev,
+      [placeId]: normalizedMinute,
+    }));
+  };
 
   useEffect(() => {
     setSegmentModes((prev) => {
@@ -2558,6 +2574,8 @@ export default function App() {
                         const segMode = segmentModes[Math.max(0, rowIndex - 1)] || 'driving';
                         const transitMinute = row.transitMinute || 0;
                         const modeLabel = segMode === 'transit' ? '公交' : segMode === 'riding' ? '骑行' : segMode === 'walking' ? '步行' : '驾车';
+                        const currentStayMinute = Math.max(15, Number(stayMinutesByPlace[row.place.id]) || row.stayMinutes);
+                        const stayParts = splitDurationMinute(currentStayMinute);
                         return (
                           <div key={`timeline_${row.id}`} className="group bg-white rounded-[24px] p-4 border border-slate-100 shadow-sm transition-all relative">
                             <div className="flex justify-between items-start gap-3">
@@ -2583,7 +2601,7 @@ export default function App() {
                                     <div className="flex items-center gap-1 rounded-full bg-slate-50 border border-slate-100 px-2 py-1">
                                       <Clock size={14} />
                                       <span className="text-[10px]">停留</span>
-                                      <span className="text-[10px] font-bold text-slate-700">{formatDurationCn(Number(stayMinutesByPlace[row.place.id]) || row.stayMinutes)}</span>
+                                      <span className="text-[10px] font-bold text-slate-700">{formatDurationCn(currentStayMinute)}</span>
                                     </div>
                                     {rowIndex > 0 ? <div className="text-[10px] px-2 py-1 rounded-full bg-slate-50 border border-slate-100 text-slate-500">{modeLabel} · {formatDurationCn(transitMinute)}</div> : null}
                                   </div>
@@ -2600,6 +2618,38 @@ export default function App() {
                                   <option value="walking">步行</option>
                                 </select>
                               </div>
+                            </div>
+                            <div className="mt-3 grid grid-cols-2 gap-2">
+                              <label className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+                                <span className="block text-[10px] font-semibold text-slate-400 mb-1">停留小时</span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max="24"
+                                  step="1"
+                                  value={stayParts.hour}
+                                  onChange={(event) => {
+                                    const nextHour = Math.max(0, Math.min(24, Number(event.target.value) || 0));
+                                    updateStayMinutes(row.place.id, nextHour * 60 + stayParts.minute);
+                                  }}
+                                  className="w-full bg-transparent text-sm font-bold text-slate-700 outline-none"
+                                />
+                              </label>
+                              <label className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+                                <span className="block text-[10px] font-semibold text-slate-400 mb-1">停留分钟</span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max="59"
+                                  step="1"
+                                  value={stayParts.minute}
+                                  onChange={(event) => {
+                                    const nextMinute = Math.max(0, Math.min(59, Number(event.target.value) || 0));
+                                    updateStayMinutes(row.place.id, stayParts.hour * 60 + nextMinute);
+                                  }}
+                                  className="w-full bg-transparent text-sm font-bold text-slate-700 outline-none"
+                                />
+                              </label>
                             </div>
                             <div className="flex items-center justify-between mt-5 pt-4 border-t border-dashed border-slate-100 gap-3">
                               <div className="flex flex-col">
