@@ -391,6 +391,13 @@ export default function App() {
       return local ? JSON.parse(local) : [];
     } catch { return []; }
   });
+  const deletedPlaceIdsRef = useRef((() => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem('travel_deleted_place_ids') || '[]').map((id) => safeStr(id)));
+    } catch {
+      return new Set();
+    }
+  })());
   
   const [trips, setTrips] = useState(() => {
     try {
@@ -545,6 +552,11 @@ export default function App() {
     });
   }, [currentCity]);
 
+  const persistDeletedPlaceIds = (nextIds) => {
+    deletedPlaceIdsRef.current = new Set(Array.from(nextIds).map((id) => safeStr(id)).filter(Boolean));
+    localStorage.setItem('travel_deleted_place_ids', JSON.stringify(Array.from(deletedPlaceIdsRef.current)));
+  };
+
   // --- 云端数据同步 ---
   useEffect(() => {
     if (user && !user.is_anonymous && supabase) {
@@ -557,8 +569,11 @@ export default function App() {
           ]);
           if (pRes.data) {
             setSavedPlaces((prev) => {
+              const deletedIds = deletedPlaceIdsRef.current;
               const merged = new Map(prev.map((item) => [item.id, item]));
-              pRes.data.forEach((item) => merged.set(item.id, item));
+              pRes.data
+                .filter((item) => !deletedIds.has(safeStr(item.id)))
+                .forEach((item) => merged.set(item.id, item));
               return Array.from(merged.values()).sort((a, b) => Number(b.savedAt || 0) - Number(a.savedAt || 0));
             });
           }
@@ -1174,6 +1189,7 @@ export default function App() {
       const filtered = prev.filter((p) => placeIdentityKey(p, newPlace.city) !== dedupeKey && p.id !== newPlace.id);
       return [newPlace, ...filtered];
     });
+    persistDeletedPlaceIds(new Set([...deletedPlaceIdsRef.current].filter((id) => id !== safeStr(newPlace.id))));
 
     if (user && !user.is_anonymous && supabase) {
       try { await supabase.from('places').upsert({ ...newPlace, user_id: user.id }); } catch(e){ logCloudError('Save place', e); }
@@ -1210,6 +1226,7 @@ export default function App() {
     );
 
     if (idsToRemove.size === 0) return;
+    persistDeletedPlaceIds(new Set([...deletedPlaceIdsRef.current, ...idsToRemove]));
 
     const stripPlaceIdsFromTrip = (trip) => normalizeTrip({
       ...trip,
