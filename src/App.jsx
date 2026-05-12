@@ -1980,7 +1980,13 @@ export default function App() {
                         {groupedFavorites[city].map(spot => (
                           <div 
                             key={spot.id} 
-                            onClick={() => { setRouteBuilderStart(spot); setRouteBuilderTargets([]); }}
+                            onClick={(e) => {
+                              if (e.target instanceof Element && e.target.closest('[data-delete-favorite="true"]')) {
+                                return;
+                              }
+                              setRouteBuilderStart(spot);
+                              setRouteBuilderTargets([]);
+                            }}
                             className="bg-white p-4 rounded-2xl shadow-sm border border-gray-50 flex justify-between items-start cursor-pointer active:scale-95 transition-transform max-w-full overflow-hidden"
                           >
                             <div className="flex-1 min-w-0 pr-4">
@@ -1991,6 +1997,7 @@ export default function App() {
                             </div>
                             <button
                               type="button"
+                              data-delete-favorite="true"
                               onPointerDown={(e) => {
                                 e.preventDefault();
                                 e.stopPropagation();
