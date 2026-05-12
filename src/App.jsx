@@ -1980,31 +1980,24 @@ export default function App() {
                         {groupedFavorites[city].map(spot => (
                           <div 
                             key={spot.id} 
-                            onClick={(e) => {
-                              if (e.target instanceof Element && e.target.closest('[data-delete-favorite="true"]')) {
-                                return;
-                              }
-                              setRouteBuilderStart(spot);
-                              setRouteBuilderTargets([]);
-                            }}
-                            className="bg-white p-4 rounded-2xl shadow-sm border border-gray-50 flex justify-between items-start cursor-pointer active:scale-95 transition-transform max-w-full overflow-hidden"
+                            className="bg-white p-4 rounded-2xl shadow-sm border border-gray-50 flex justify-between items-start max-w-full overflow-hidden"
                           >
-                            <div className="flex-1 min-w-0 pr-4">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setRouteBuilderStart(spot);
+                                setRouteBuilderTargets([]);
+                              }}
+                              className="flex-1 min-w-0 pr-4 text-left cursor-pointer active:scale-95 transition-transform"
+                            >
                               <p className="font-bold text-slate-700 break-words leading-snug">{safeStr(spot.name)}</p>
                               <p className="text-[11px] leading-5 text-slate-400 break-words flex items-start gap-1 mt-1 max-w-full">
                                 <MapPin size={10} className="mt-[3px] shrink-0" /> <span className="min-w-0 break-words">{normalizeAddressText(spot)}</span>
                               </p>
-                            </div>
+                            </button>
                             <button
                               type="button"
-                              data-delete-favorite="true"
-                              onPointerDown={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                              }}
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
+                              onClick={() => {
                                 removePlace(spot);
                               }}
                               className="text-slate-300 hover:text-red-400 p-2 rounded-full hover:bg-red-50 transition-colors"
