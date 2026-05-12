@@ -212,6 +212,36 @@ const mergeTripLists = (localTrips = [], cloudTrips = []) => {
   return Array.from(merged.values());
 };
 
+const areCoordsEqual = (a, b, tolerance = 0.000001) => (
+  Array.isArray(a) &&
+  Array.isArray(b) &&
+  a.length === 2 &&
+  b.length === 2 &&
+  Math.abs(Number(a[0]) - Number(b[0])) <= tolerance &&
+  Math.abs(Number(a[1]) - Number(b[1])) <= tolerance
+);
+
+const buildPlacesSignature = (places = [], isRoute = false) => places
+  .map((place, index) => {
+    const coords = getLngLat(place?.location);
+    return [
+      safeStr(place?.id) || `idx_${index}`,
+      isRoute ? index + 1 : safeStr(place?.name),
+      coords ? `${coords[0]},${coords[1]}` : 'no_coords',
+    ].join(':');
+  })
+  .join('|');
+
+const createMarkerContent = (labelText) => `
+  <div style="position:relative;display:flex;align-items:flex-start;justify-content:center;width:32px;height:44px;">
+    <div style="position:absolute;top:0;left:50%;transform:translateX(-50%);min-width:18px;height:18px;padding:0 4px;border:2px solid #4C6FFF;border-radius:2px;background:#FFFFFF;color:#1F2937;font-size:12px;font-weight:700;line-height:14px;display:flex;align-items:center;justify-content:center;box-sizing:border-box;white-space:nowrap;">
+      ${String(labelText ?? '')}
+    </div>
+    <div style="position:absolute;left:50%;bottom:0;transform:translateX(-50%);width:18px;height:28px;background:linear-gradient(180deg,#5EA7FF 0%,#347DFF 100%);border-radius:12px 12px 12px 0;transform-origin:center bottom;rotate:-45deg;box-shadow:0 4px 10px rgba(52,125,255,0.22);"></div>
+    <div style="position:absolute;left:50%;bottom:13px;transform:translateX(-50%);width:8px;height:8px;border-radius:9999px;background:#FFFFFF;"></div>
+  </div>
+`;
+
 // ==========================================
 // 地图核心组件
 // ==========================================
@@ -226,6 +256,9 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
   const mapViewChangeRef = useRef(onMapViewChange);
   const debounceRef = useRef(null);
   const isUserInteractingRef = useRef(false);
+  const suppressViewSyncRef = useRef(false);
+  const lastAutoFitSignatureRef = useRef('');
+  const hasUserAdjustedViewRef = useRef(false);
 
   // 始终保持回调最新，不触发重渲染
   useEffect(() => {
@@ -253,7 +286,10 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
           const zoom = mapInstance.current?.getZoom?.();
           const center = mapInstance.current?.getCenter?.();
           if (typeof zoom === 'number' && center && mapViewChangeRef.current) {
+            hasUserAdjustedViewRef.current = true;
+            suppressViewSyncRef.current = true;
             mapViewChangeRef.current({ zoom, center: [center.lng, center.lat] });
+            setTimeout(() => { suppressViewSyncRef.current = false; }, 0);
           }
         }, 500);
       };
@@ -273,6 +309,23 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapStatus]);
 
+  useEffect(() => () => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    const map = mapInstance.current;
+    if (!map) return;
+    try {
+      markersRef.current.forEach((marker) => map.remove(marker));
+      polylinesRef.current.forEach((polyline) => map.remove(polyline));
+      map.destroy?.();
+    } catch (err) {
+      console.error('Map cleanup error:', err);
+    } finally {
+      markersRef.current = [];
+      polylinesRef.current = [];
+      mapInstance.current = null;
+    }
+  }, []);
+
   // 第二个useEffect：只负责更新城市定位，不重建地图
   useEffect(() => {
     const map = mapInstance.current;
@@ -284,28 +337,42 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentCity]);
 
-  // 第三个useEffect：只负责更新marker和polyline，不重建地图实例
+  // 当外部明确修改 mapView（例如重置视图）时，同步到地图实例
+  useEffect(() => {
+    const map = mapInstance.current;
+    if (!map || !mapView || suppressViewSyncRef.current) return;
+    const currentCenter = map.getCenter?.();
+    const nextCenter = Array.isArray(mapView.center) && mapView.center.length === 2 ? mapView.center : null;
+    const currentZoom = map.getZoom?.();
+    const nextZoom = typeof mapView.zoom === 'number' ? mapView.zoom : null;
+
+    if (nextCenter && currentCenter && !areCoordsEqual([currentCenter.lng, currentCenter.lat], nextCenter)) {
+      map.setCenter(nextCenter);
+    }
+    if (typeof nextZoom === 'number' && typeof currentZoom === 'number' && currentZoom !== nextZoom) {
+      map.setZoom(nextZoom);
+    }
+  }, [mapView]);
+
+  // 第三个useEffect：只更新 marker，避免路线返回时反复重建 marker
   useEffect(() => {
     const map = mapInstance.current;
     if (!map) return;
     if (isUserInteractingRef.current) return;
 
     try {
-      // 移除旧marker
       markersRef.current.forEach(m => map.remove(m));
       markersRef.current = [];
-      // 移除旧polyline
-      polylinesRef.current.forEach(p => map.remove(p));
-      polylinesRef.current = [];
 
-      // 按顺序添加marker
       places.forEach((p, idx) => {
         const coords = getLngLat(p.location);
         if (!coords) return;
         const marker = new window.AMap.Marker({
           position: coords,
           cursor: markerClickRef.current ? 'pointer' : 'default',
-          label: { content: String(isRoute ? idx + 1 : safeStr(p.name)), direction: 'top' },
+          anchor: 'bottom-center',
+          offset: new window.AMap.Pixel(-16, -44),
+          content: createMarkerContent(isRoute ? idx + 1 : safeStr(p.name)),
           extData: p,
           zIndex: 100 + idx,
         });
@@ -314,39 +381,49 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
         markersRef.current.push(marker);
       });
 
-      // 绘制路线，严格按places顺序
-      if (isRoute && places.length >= 2) {
-        // routeSegments[i] 对应 places[i] → places[i+1] 的路线
-        const validSegments = routeSegments.length === places.length - 1;
-        if (validSegments) {
-          routeSegments.forEach((segment, i) => {
-            const path = Array.isArray(segment?.path) && segment.path.length >= 2
-              ? segment.path.filter(Boolean)
-              : [getLngLat(places[i]?.location), getLngLat(places[i + 1]?.location)].filter(Boolean);
-            if (path.length >= 2) {
-              const polyline = new window.AMap.Polyline({
-                path,
-                strokeColor: '#95C2E2',
-                strokeWeight: 6,
-                strokeOpacity: 0.92,
-                lineJoin: 'round',
-                lineCap: 'round',
-                zIndex: 50,
-              });
-              map.add(polyline);
-              polylinesRef.current.push(polyline);
-            }
-          });
-        } else {
-          // 路线还未计算完，用直线按顺序连接
-          const path = places.map(p => getLngLat(p.location)).filter(Boolean);
+      const placesSignature = buildPlacesSignature(places, isRoute);
+      const shouldAutoFit = places.length > 0 &&
+        (!lockViewport || isRoute) &&
+        lastAutoFitSignatureRef.current !== placesSignature &&
+        (!hasUserAdjustedViewRef.current || lastAutoFitSignatureRef.current === '');
+
+      if (shouldAutoFit) {
+        suppressViewSyncRef.current = true;
+        map.setFitView(markersRef.current, false, [60, 60, 60, 60]);
+        setTimeout(() => { suppressViewSyncRef.current = false; }, 0);
+        lastAutoFitSignatureRef.current = placesSignature;
+      }
+    } catch (err) {
+      console.error('Map update error:', err);
+    }
+  }, [places, isRoute, lockViewport]);
+
+  // 第四个useEffect：只更新连线，不触发 marker 重建或 fitView
+  useEffect(() => {
+    const map = mapInstance.current;
+    if (!map) return;
+
+    try {
+      polylinesRef.current.forEach(p => map.remove(p));
+      polylinesRef.current = [];
+
+      if (!isRoute || places.length < 2) return;
+
+      const validSegments = routeSegments.length === places.length - 1;
+      if (validSegments) {
+        routeSegments.forEach((segment, i) => {
+          const start = getLngLat(places[i]?.location);
+          const end = getLngLat(places[i + 1]?.location);
+          const directPath = [start, end].filter(Boolean);
+          const path = directPath.length >= 2 ? directPath : Array.isArray(segment?.path) ? segment.path.filter(Boolean) : [];
           if (path.length >= 2) {
             const polyline = new window.AMap.Polyline({
               path,
+              geodesic: false,
+              showDir: false,
               strokeColor: '#95C2E2',
-              strokeWeight: 4,
-              strokeOpacity: 0.6,
-              strokeDasharray: [10, 5],
+              strokeWeight: 6,
+              strokeOpacity: 0.92,
               lineJoin: 'round',
               lineCap: 'round',
               zIndex: 50,
@@ -354,17 +431,30 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
             map.add(polyline);
             polylinesRef.current.push(polyline);
           }
+        });
+      } else {
+        const path = places.map(p => getLngLat(p.location)).filter(Boolean);
+        if (path.length >= 2) {
+          const polyline = new window.AMap.Polyline({
+            path,
+            geodesic: false,
+            showDir: false,
+            strokeColor: '#95C2E2',
+            strokeWeight: 4,
+            strokeOpacity: 0.6,
+            strokeDasharray: [10, 5],
+            lineJoin: 'round',
+            lineCap: 'round',
+            zIndex: 50,
+          });
+          map.add(polyline);
+          polylinesRef.current.push(polyline);
         }
       }
-
-      // fitView：只在地点数据变化时调整，不在用户交互后调整
-      if (places.length > 0 && (!lockViewport || isRoute)) {
-        map.setFitView(markersRef.current, false, [60, 60, 60, 60]);
-      }
     } catch (err) {
-      console.error('Map update error:', err);
+      console.error('Map polyline update error:', err);
     }
-  }, [places, isRoute, routeSegments, lockViewport]);
+  }, [places, isRoute, routeSegments]);
 
   if (mapStatus === 'loading') return <div className="w-full aspect-square bg-blue-50 rounded-3xl flex items-center justify-center text-blue-300 shadow-inner mb-6"><Loader2 className="animate-spin" /></div>;
   if (mapStatus === 'no-key') return <div className="w-full aspect-square bg-gray-50 border-2 border-dashed border-gray-200 rounded-3xl flex flex-col items-center justify-center p-6 text-center shadow-inner mb-6"><MapIcon size={32} className="text-gray-300 mb-3" /><p className="text-sm font-bold text-gray-500 mb-1">尚未配置完整的地图 API</p></div>;
