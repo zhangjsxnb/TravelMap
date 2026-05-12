@@ -1989,7 +1989,19 @@ export default function App() {
                                 <MapPin size={10} className="mt-[3px] shrink-0" /> <span className="min-w-0 break-words">{normalizeAddressText(spot)}</span>
                               </p>
                             </div>
-                            <button onClick={(e) => { e.stopPropagation(); removePlace(spot); }} className="text-slate-300 hover:text-red-400 p-2 rounded-full hover:bg-red-50 transition-colors">
+                            <button
+                              type="button"
+                              onPointerDown={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                              }}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                removePlace(spot);
+                              }}
+                              className="text-slate-300 hover:text-red-400 p-2 rounded-full hover:bg-red-50 transition-colors"
+                            >
                               <Trash2 size={16} />
                             </button>
                           </div>
