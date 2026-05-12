@@ -262,6 +262,15 @@ const buildPlacesSignature = (places = [], isRoute = false) => places
   })
   .join('|');
 
+const buildMarkerKey = (place, index, isRoute) => {
+  const coords = getLngLat(place?.location);
+  return [
+    safeStr(place?.id) || `idx_${index}`,
+    isRoute ? `route_${index + 1}` : `spot_${safeStr(place?.name)}`,
+    coords ? `${coords[0].toFixed(6)},${coords[1].toFixed(6)}` : 'no_coords',
+  ].join('::');
+};
+
 const createMarkerContent = (labelText) => `
   <div style="position:relative;display:flex;align-items:flex-start;justify-content:center;width:32px;height:44px;overflow:visible;">
     <div style="position:absolute;top:0;left:50%;transform:translateX(-50%);min-width:18px;height:18px;padding:0 4px;border:2px solid #4C6FFF;border-radius:2px;background:#FFFFFF;color:#1F2937;font-size:12px;font-weight:700;line-height:14px;display:flex;align-items:center;justify-content:center;box-sizing:border-box;white-space:nowrap;">
@@ -275,10 +284,10 @@ const createMarkerContent = (labelText) => `
 // ==========================================
 // 地图核心组件
 // ==========================================
-const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, currentCity, onMarkerClick, onMapClick, lockViewport = true, mapView, onMapViewChange, routeSegments = [], className = '', heightClassName = '' }) => {
+const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, currentCity, onMarkerClick, onMapClick, lockViewport = true, mapView, onMapViewChange, routeSegments = [], className = '', heightClassName = '', visible = true }) => {
   const containerRef = useRef(null);
   const mapInstance = useRef(null);
-  const markersRef = useRef([]);
+  const markersRef = useRef(new Map());
   const polylinesRef = useRef([]);
   const prevCityRef = useRef('');
   const markerClickRef = useRef(onMarkerClick);
@@ -296,6 +305,18 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
     mapClickRef.current = onMapClick;
     mapViewChangeRef.current = onMapViewChange;
   }, [onMarkerClick, onMapClick, onMapViewChange]);
+
+  useEffect(() => {
+    if (!visible || !mapInstance.current) return;
+    const timer = setTimeout(() => {
+      try {
+        mapInstance.current?.resize?.();
+      } catch (err) {
+        console.error('Map resize error:', err);
+      }
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [visible]);
 
   // 第一个useEffect：只负责初始化地图实例，只跑一次
   useEffect(() => {
@@ -350,7 +371,7 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
     } catch (err) {
       console.error('Map cleanup error:', err);
     } finally {
-      markersRef.current = [];
+      markersRef.current = new Map();
       polylinesRef.current = [];
       mapInstance.current = null;
     }
@@ -391,23 +412,38 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
     if (isUserInteractingRef.current) return;
 
     try {
-      markersRef.current.forEach(m => map.remove(m));
-      markersRef.current = [];
-
+      const nextMarkerKeys = new Set();
       places.forEach((p, idx) => {
         const position = toAMapLngLat(p.location);
         if (!position) return;
-        const marker = new window.AMap.Marker({
-          position,
-          cursor: markerClickRef.current ? 'pointer' : 'default',
-          anchor: 'bottom-center',
-          content: createMarkerContent(isRoute ? idx + 1 : safeStr(p.name)),
-          extData: p,
-          zIndex: 100 + idx,
-        });
-        if (markerClickRef.current) marker.on('click', () => markerClickRef.current(p));
-        map.add(marker);
-        markersRef.current.push(marker);
+        const markerKey = buildMarkerKey(p, idx, isRoute);
+        nextMarkerKeys.add(markerKey);
+        const markerLabel = isRoute ? idx + 1 : safeStr(p.name);
+        let marker = markersRef.current.get(markerKey);
+        if (!marker) {
+          marker = new window.AMap.Marker({
+            position,
+            cursor: markerClickRef.current ? 'pointer' : 'default',
+            anchor: 'bottom-center',
+            content: createMarkerContent(markerLabel),
+            extData: p,
+            zIndex: 100 + idx,
+          });
+          if (markerClickRef.current) marker.on('click', () => markerClickRef.current(marker.getExtData?.() || p));
+          map.add(marker);
+          markersRef.current.set(markerKey, marker);
+        } else {
+          marker.setPosition?.(position);
+          marker.setContent?.(createMarkerContent(markerLabel));
+          marker.setExtData?.(p);
+          marker.setzIndex?.(100 + idx);
+        }
+      });
+
+      Array.from(markersRef.current.entries()).forEach(([markerKey, marker]) => {
+        if (nextMarkerKeys.has(markerKey)) return;
+        map.remove(marker);
+        markersRef.current.delete(markerKey);
       });
 
       const placesSignature = buildPlacesSignature(places, isRoute);
@@ -418,7 +454,7 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
 
       if (shouldAutoFit) {
         suppressViewSyncRef.current = true;
-        map.setFitView(markersRef.current, false, [60, 60, 60, 60]);
+        map.setFitView(Array.from(markersRef.current.values()), false, [60, 60, 60, 60]);
         setTimeout(() => { suppressViewSyncRef.current = false; }, 0);
         lastAutoFitSignatureRef.current = placesSignature;
       }
@@ -644,6 +680,7 @@ export default function App() {
   const routeCacheRef = useRef(new Map());
   const searchRequestRef = useRef(0);
   const itinerarySearchRequestRef = useRef(0);
+  const favoriteActionTokenRef = useRef(0);
 
   // --- 本地缓存备份 ---
   useEffect(() => { localStorage.setItem('travel_saved_places', JSON.stringify(savedPlaces)); }, [savedPlaces]);
@@ -675,6 +712,19 @@ export default function App() {
       return Array.from(map.values()).sort((a, b) => Number(b.savedAt || 0) - Number(a.savedAt || 0));
     });
   }, [currentCity]);
+
+  const savedPlacesById = useMemo(() => {
+    const map = new Map();
+    savedPlaces.forEach((place) => {
+      map.set(safeStr(place.id), place);
+    });
+    return map;
+  }, [savedPlaces]);
+
+  const cityFilteredPlaces = useMemo(
+    () => savedPlaces.filter((place) => isNationwideCity(currentCity) || place.city === currentCity),
+    [savedPlaces, currentCity],
+  );
 
   const persistDeletedPlaceIds = (nextIds) => {
     deletedPlaceIdsRef.current = new Set(Array.from(nextIds).map((id) => safeStr(id)).filter(Boolean));
@@ -989,7 +1039,7 @@ export default function App() {
   useEffect(() => {
     const dayPlaces = activeTrip?.days?.[Math.max(0, currentRouteDay - 1)]?.places || [];
     const currentDayTripPlaces = dayPlaces
-      .map((pid) => savedPlaces.find((p) => p.id === pid))
+      .map((pid) => savedPlacesById.get(safeStr(pid)))
       .filter(Boolean);
     const currentDayTripPlaceIds = currentDayTripPlaces.map((place) => place.id).join(',');
     if (!window.AMap || currentDayTripPlaces.length < 2 || !showRoutePanel) {
@@ -1077,7 +1127,7 @@ export default function App() {
     };
     fetchSegments();
     return () => { canceled = true; };
-  }, [activeTrip, currentRouteDay, savedPlaces, segmentModes, currentCity, mapStatus, showRoutePanel]);
+  }, [activeTrip, currentRouteDay, savedPlacesById, segmentModes, currentCity, mapStatus, showRoutePanel]);
 
   const handleSegmentModeChange = (index, newMode) => {
     routeCacheRef.current.clear();
@@ -1107,31 +1157,50 @@ export default function App() {
   // ==========================================
   // 数据同步写入操作逻辑
   // ==========================================
+  const upsertSavedPlaceLocally = (placeData, dedupeKey) => {
+    setSavedPlaces((prev) => {
+      const filtered = prev.filter((place) => placeIdentityKey(place, place.city || currentCity) !== dedupeKey && safeStr(place.id) !== safeStr(placeData.id));
+      return [placeData, ...filtered].sort((a, b) => Number(b.savedAt || 0) - Number(a.savedAt || 0));
+    });
+  };
+
   const handleSavePlace = async (placeData, stayOpen = false) => {
     const placeName = safeStr(placeData.name) || '未知地点';
     const inferredCity = inferCityName(placeData, currentCity);
-    const resolvedAddress = await resolveAddressForPlace(placeData);
     const dedupeKey = placeIdentityKey(placeData, currentCity);
     const existingByKey = savedPlaces.find((place) => placeIdentityKey(place, inferredCity) === dedupeKey);
-    const newPlace = {
+    const optimisticPlace = {
       id: existingByKey?.id || placeData.id || Date.now().toString(),
       name: placeName,
       location: normalizePlaceLocation(placeData.location),
       category: safeStr(placeData.category) || '景点',
-      address: safeStr(resolvedAddress.address) || stripDistrictPrefix(placeData?.address, placeData?.district),
-      district: safeStr(resolvedAddress.district) || safeStr(placeData.district) || safeStr(existingByKey?.district) || '',
+      address: stripDistrictPrefix(placeData?.address, placeData?.district) || safeStr(existingByKey?.address) || '地址待补全',
+      district: safeStr(placeData.district) || safeStr(existingByKey?.district) || '',
       city: inferredCity,
       savedAt: Date.now()
     };
-    setSavedPlaces(prev => {
-      const filtered = prev.filter((p) => placeIdentityKey(p, newPlace.city) !== dedupeKey && p.id !== newPlace.id);
-      return [newPlace, ...filtered];
-    });
-    persistDeletedPlaceIds(new Set([...deletedPlaceIdsRef.current].filter((id) => id !== safeStr(newPlace.id))));
+    upsertSavedPlaceLocally(optimisticPlace, dedupeKey);
+    persistDeletedPlaceIds(new Set([...deletedPlaceIdsRef.current].filter((id) => id !== safeStr(optimisticPlace.id))));
+    const actionToken = ++favoriteActionTokenRef.current;
 
     if (user && !user.is_anonymous && supabase) {
-      try { await supabase.from('places').upsert({ ...newPlace, user_id: user.id }); } catch(e){ logCloudError('Save place', e); }
+      supabase.from('places').upsert({ ...optimisticPlace, user_id: user.id }).catch((e) => logCloudError('Save place', e));
     }
+
+    resolveAddressForPlace(placeData)
+      .then((resolvedAddress) => {
+        if (favoriteActionTokenRef.current < actionToken) return;
+        const hydratedPlace = {
+          ...optimisticPlace,
+          address: safeStr(resolvedAddress.address) || optimisticPlace.address,
+          district: safeStr(resolvedAddress.district) || optimisticPlace.district,
+        };
+        upsertSavedPlaceLocally(hydratedPlace, dedupeKey);
+        if (user && !user.is_anonymous && supabase) {
+          supabase.from('places').upsert({ ...hydratedPlace, user_id: user.id }).catch((e) => logCloudError('Save hydrated place', e));
+        }
+      })
+      .catch((e) => logCloudError('Resolve address for save place', e));
     
     if (!stayOpen) {
       setSelectedPlace(null);
@@ -1301,10 +1370,7 @@ export default function App() {
       city: inferredCity,
       savedAt: existingByKey?.savedAt || Date.now(),
     };
-    setSavedPlaces((prev) => {
-      const filtered = prev.filter((p) => placeIdentityKey(p, newPlace.city) !== dedupeKey && p.id !== newPlace.id);
-      return [newPlace, ...filtered];
-    });
+    upsertSavedPlaceLocally(newPlace, dedupeKey);
     if (user && !user.is_anonymous && supabase) {
       try {
         await supabase.from('places').upsert({ ...newPlace, user_id: user.id });
@@ -1631,17 +1697,67 @@ export default function App() {
     });
   };
 
-  const filteredFavs = savedPlaces.filter(p => 
-    safeStr(p.name).toLowerCase().includes(favSearchQuery.toLowerCase()) ||
-    safeStr(p.address).toLowerCase().includes(favSearchQuery.toLowerCase())
-  );
+  const deferredFavSearchQuery = favSearchQuery.trim().toLowerCase();
+  const filteredFavs = useMemo(() => (
+    savedPlaces.filter((place) => (
+      safeStr(place.name).toLowerCase().includes(deferredFavSearchQuery) ||
+      safeStr(place.address).toLowerCase().includes(deferredFavSearchQuery)
+    ))
+  ), [savedPlaces, deferredFavSearchQuery]);
 
-  const groupedFavorites = filteredFavs.reduce((acc, spot) => {
-    const city = spot.city || '其他城市';
-    if (!acc[city]) acc[city] = [];
-    acc[city].push(spot);
-    return acc;
-  }, {});
+  const groupedFavorites = useMemo(() => (
+    filteredFavs.reduce((acc, spot) => {
+      const city = spot.city || '其他城市';
+      if (!acc[city]) acc[city] = [];
+      acc[city].push(spot);
+      return acc;
+    }, {})
+  ), [filteredFavs]);
+
+  const totalDist = segmentRoutes.reduce((acc, curr) => acc + (curr?.distance || 0), 0);
+  const totalTime = segmentRoutes.reduce((acc, curr) => acc + (curr?.time || 0), 0);
+  void totalDist;
+  void totalTime;
+  const dayStorageKey = `${safeStr(activeTripId) || 'default'}::day_${currentRouteDay}`;
+  const currentDayPlaceIds = useMemo(() => activeTrip?.days?.[currentRouteDay - 1]?.places || [], [activeTrip, currentRouteDay]);
+  const currentDayTripPlaces = useMemo(() => (
+    currentDayPlaceIds
+      .map((pid) => savedPlacesById.get(safeStr(pid)))
+      .filter(Boolean)
+  ), [currentDayPlaceIds, savedPlacesById]);
+  const timelineRows = useMemo(() => {
+    const dayStartAt = safeStr(dayStartTimes[dayStorageKey]) || '10:00';
+    const initialMinute = toMinute(dayStartAt);
+    const result = currentDayTripPlaces.reduce((accumulator, place, index) => {
+      const segment = index > 0 ? segmentRoutes[index - 1] : null;
+      const transitMinute = index > 0 ? Math.max(0, Math.round((segment?.time || 0) / 60)) : 0;
+      const overrideMinute = Number(arrivalOverridesByPlace[`${dayStorageKey}::${place.id}`]);
+      const arriveMinute = index === 0
+        ? (Number.isFinite(overrideMinute) ? overrideMinute : initialMinute)
+        : (Number.isFinite(overrideMinute) ? overrideMinute : accumulator.cursor + transitMinute);
+      const stayMinutes = Math.max(15, Number(stayMinutesByPlace[place.id]) || estimateStayMinutes(place));
+      const leaveMinute = arriveMinute + stayMinutes;
+      accumulator.rows.push({
+        id: place.id || `${index}`,
+        place,
+        arriveMinute,
+        arriveAt: toTimeText(arriveMinute),
+        leaveMinute,
+        leaveAt: toTimeText(leaveMinute),
+        stayMinutes,
+        transitMinute
+      });
+      accumulator.cursor = leaveMinute;
+      return accumulator;
+    }, { rows: [], cursor: initialMinute });
+    return result.rows;
+  }, [arrivalOverridesByPlace, currentDayTripPlaces, dayStartTimes, dayStorageKey, segmentRoutes, stayMinutesByPlace]);
+  const totalDays = routeDayCount;
+  const dayOptions = useMemo(() => Array.from({ length: totalDays }, (_, idx) => idx + 1), [totalDays]);
+  const currentDayRows = timelineRows;
+  const currentDayTransitMinutes = currentDayRows.reduce((sum, row) => sum + (row.transitMinute || 0), 0);
+  const currentDayStayMinutes = currentDayRows.reduce((sum, row) => sum + (row.stayMinutes || 0), 0);
+  const currentDayTotalMinutes = currentDayTransitMinutes + currentDayStayMinutes;
 
   if (authLoading && !user && !email) {
     return <div className="min-h-[100dvh] flex items-center justify-center bg-[#FCF8E7]"><Loader2 className="animate-spin text-[#95C2E2]" size={32}/></div>;
@@ -1720,49 +1836,6 @@ export default function App() {
     );
   }
 
-  const totalDist = segmentRoutes.reduce((acc, curr) => acc + (curr?.distance || 0), 0);
-  const totalTime = segmentRoutes.reduce((acc, curr) => acc + (curr?.time || 0), 0);
-  void totalDist;
-  void totalTime;
-  const dayStorageKey = `${safeStr(activeTripId) || 'default'}::day_${currentRouteDay}`;
-  const currentDayPlaceIds = activeTrip?.days?.[currentRouteDay - 1]?.places || [];
-  const currentDayTripPlaces = currentDayPlaceIds
-    .map((pid) => savedPlaces.find((place) => place.id === pid))
-    .filter(Boolean);
-  const timelineRows = (() => {
-    const dayStartAt = safeStr(dayStartTimes[dayStorageKey]) || '10:00';
-    const initialMinute = toMinute(dayStartAt);
-    const result = currentDayTripPlaces.reduce((accumulator, place, index) => {
-      const segment = index > 0 ? segmentRoutes[index - 1] : null;
-      const transitMinute = index > 0 ? Math.max(0, Math.round((segment?.time || 0) / 60)) : 0;
-      const overrideMinute = Number(arrivalOverridesByPlace[`${dayStorageKey}::${place.id}`]);
-      const arriveMinute = index === 0
-        ? (Number.isFinite(overrideMinute) ? overrideMinute : initialMinute)
-        : (Number.isFinite(overrideMinute) ? overrideMinute : accumulator.cursor + transitMinute);
-      const stayMinutes = Math.max(15, Number(stayMinutesByPlace[place.id]) || estimateStayMinutes(place));
-      const leaveMinute = arriveMinute + stayMinutes;
-      accumulator.rows.push({
-        id: place.id || `${index}`,
-        place,
-        arriveMinute,
-        arriveAt: toTimeText(arriveMinute),
-        leaveMinute,
-        leaveAt: toTimeText(leaveMinute),
-        stayMinutes,
-        transitMinute
-      });
-      accumulator.cursor = leaveMinute;
-      return accumulator;
-    }, { rows: [], cursor: initialMinute });
-    return result.rows;
-  })();
-  const totalDays = routeDayCount;
-  const dayOptions = Array.from({ length: totalDays }, (_, idx) => idx + 1);
-  const currentDayRows = timelineRows;
-  const currentDayTransitMinutes = currentDayRows.reduce((sum, row) => sum + (row.transitMinute || 0), 0);
-  const currentDayStayMinutes = currentDayRows.reduce((sum, row) => sum + (row.stayMinutes || 0), 0);
-  const currentDayTotalMinutes = currentDayTransitMinutes + currentDayStayMinutes;
-
   return (
     <div className="min-h-[100dvh] w-full flex justify-center bg-gray-100 sm:bg-[#f0f4f8]" style={{ fontFamily: '"PingFang SC","Hiragino Sans GB","Noto Sans SC","Microsoft YaHei",sans-serif' }}>
       <div className="w-full sm:max-w-[960px] h-[100dvh] flex flex-col relative bg-white overflow-hidden shadow-2xl min-h-0">
@@ -1773,8 +1846,7 @@ export default function App() {
         <div className="flex-1 relative z-10 flex flex-col overflow-hidden min-h-0">
           
           {/* ==================== 发现页面 ==================== */}
-          {activeTab === 'map' && (
-            <div className="flex-1 flex flex-col animate-in fade-in min-h-0">
+          <div className={`${activeTab === 'map' ? 'flex' : 'hidden'} flex-1 flex-col animate-in fade-in min-h-0`}>
               <div className="px-6 shrink-0">
                 {!isSearching && <h2 className="text-[28px] sm:text-[30px] leading-none font-bold mb-4" style={{ color: COLORS.textDark }}>发现地点</h2>}
                 
@@ -1851,7 +1923,7 @@ export default function App() {
                 ) : (
                   <div className="animate-in fade-in">
                     <RealMap 
-                      places={savedPlaces.filter(p => isNationwideCity(currentCity) || p.city === currentCity)} 
+                      places={cityFilteredPlaces}
                       mapStatus={mapStatus} 
                       mapErrorMsg={mapErrorMsg} 
                       currentCity={currentCity} 
@@ -1859,6 +1931,7 @@ export default function App() {
                       mapView={mapView}
                       onMapViewChange={setMapView}
                       onMarkerClick={(p) => setSelectedPlace(p)}
+                      visible={activeTab === 'map'}
                       className="rounded-[32px] shadow-inner"
                       heightClassName="h-[360px] sm:h-[420px]"
                     />
@@ -1871,11 +1944,9 @@ export default function App() {
                 )}
               </div>
             </div>
-          )}
 
           {/* ==================== 鏀惰棌澶归〉闈?==================== */}
-          {activeTab === 'favorites' && (
-            <div className="h-full flex flex-col animate-in fade-in bg-[#f0f4f8] min-h-0 overflow-x-hidden">
+          <div className={`${activeTab === 'favorites' ? 'flex' : 'hidden'} h-full flex-col animate-in fade-in bg-[#f0f4f8] min-h-0 overflow-x-hidden`}>
                <div className="px-6 pt-5 pb-3 bg-white shadow-sm z-10 shrink-0 overflow-x-hidden">
                  <h2 className="text-[22px] sm:text-[24px] leading-tight font-semibold tracking-[0.01em] text-slate-800">我的收藏</h2>
                  <div className="relative mt-4">
@@ -1943,11 +2014,9 @@ export default function App() {
                   )}
                </div>
             </div>
-          )}
 
           {/* ==================== 行程页面 ==================== */}
-          {activeTab === 'lists' && (
-            <div className="h-full flex flex-col px-6 animate-in fade-in min-h-0">
+          <div className={`${activeTab === 'lists' ? 'flex' : 'hidden'} h-full flex-col px-6 animate-in fade-in min-h-0`}>
                <div className="flex justify-between items-center py-4 shrink-0">
                   <h2 className="text-[22px] sm:text-[24px] font-semibold text-slate-800">我的行程</h2>
                   <button onClick={() => setNewTripModalVisible(true)} className="w-10 h-10 rounded-full flex items-center justify-center bg-white shadow-sm active:scale-95"><Plus size={20} color={COLORS.primary}/></button>
@@ -1993,11 +2062,9 @@ export default function App() {
                   )}
                </div>
             </div>
-          )}
 
           {/* ==================== 澶囧繕椤甸潰 ==================== */}
-          {activeTab === 'memo' && (
-            <div className="h-full flex flex-col animate-in fade-in bg-[#f0f4f8] min-h-0">
+          <div className={`${activeTab === 'memo' ? 'flex' : 'hidden'} h-full flex-col animate-in fade-in bg-[#f0f4f8] min-h-0`}>
                <div className="px-6 py-5 bg-white shadow-sm z-10 shrink-0">
                  <h2 className="text-2xl font-bold">出行备忘录</h2>
                  <p className="text-xs mt-1 font-medium text-slate-400">记录你的通用出行装备与事项</p>
@@ -2082,11 +2149,9 @@ export default function App() {
                   )}
                </div>
             </div>
-          )}
 
           {/* ==================== 鎴戠殑椤甸潰 ==================== */}
-          {activeTab === 'profile' && (
-            <div className="h-full flex flex-col items-center justify-center animate-in fade-in px-6">
+          <div className={`${activeTab === 'profile' ? 'flex' : 'hidden'} h-full flex-col items-center justify-center animate-in fade-in px-6`}>
               <div className="w-20 h-20 rounded-full mb-4 shadow-md flex items-center justify-center bg-white border-4 border-white">
                  <User size={32} color={COLORS.primary} />
               </div>
@@ -2116,7 +2181,6 @@ export default function App() {
                 <LogOut size={16} /> 退出账号 / 返回登录页
               </button>
             </div>
-          )}
         </div>
 
         {/* ==================== 底部导航 ==================== */}
@@ -2269,8 +2333,7 @@ export default function App() {
         {/* ==================================================== */}
         {/* 行程路线展示弹窗：分段交通与自由排序升级 */}
         {/* ==================================================== */}
-        {showRoutePanel && activeTripId && (
-          <div className="fixed inset-0 z-[120] flex flex-col bg-slate-50 min-h-0">
+        <div className={`${showRoutePanel && activeTripId ? 'flex' : 'hidden'} fixed inset-0 z-[120] flex-col bg-slate-50 min-h-0`}>
             <div className="px-5 sm:px-6 py-4 flex items-center justify-between border-b border-slate-100 shrink-0 bg-white">
               <h2 className="text-[20px] sm:text-[24px] leading-tight font-semibold text-slate-800">行程规划与地图</h2>
               <button onClick={() => setShowRoutePanel(false)} className="p-2 rounded-full bg-slate-100"><X size={20} /></button>
@@ -2289,6 +2352,7 @@ export default function App() {
                       onMapViewChange={setRouteMapView}
                       routeSegments={segmentRoutes}
                       onMapClick={handleRouteMapClickAdd}
+                      visible={showRoutePanel && activeTripId}
                       className="rounded-[28px]"
                       heightClassName="h-[280px] sm:h-[360px] lg:h-[400px]"
                     />
@@ -2463,7 +2527,6 @@ export default function App() {
               </div>
             </div>
           </div>
-        )}
 
         {showMemoTemplateModal && (
           <div className="fixed inset-0 z-[160] flex items-center justify-center bg-black/40 backdrop-blur-sm p-6 animate-in fade-in">
