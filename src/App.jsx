@@ -2486,7 +2486,7 @@ export default function App() {
                                       <button type="button" onClick={() => movePlaceInDay(row.place.id, 1)} disabled={currentDayRows.indexOf(row) === currentDayRows.length - 1} className="w-6 h-6 flex items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 disabled:opacity-20 disabled:cursor-not-allowed transition-colors" title="下移">
                                         <ChevronRight size={13} style={{ transform: 'rotate(90deg)' }} />
                                       </button>
-                                      <button type="button" onClick={() => removePlaceFromDay(row.place.id)} className="w-6 h-6 flex items-center justify-center rounded-lg text-red-300 hover:bg-red-50 hover:text-red-500 transition-colors" title="删除">
+                                      <button type="button" onClick={() => removePlace(row.place.id)} className="w-6 h-6 flex items-center justify-center rounded-lg text-red-300 hover:bg-red-50 hover:text-red-500 transition-colors" title="删除">
                                         <Trash2 size={12} />
                                       </button>
                                     </div>
