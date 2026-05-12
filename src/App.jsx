@@ -1185,30 +1185,69 @@ export default function App() {
     }
   };
 
-  const removePlace = async (id) => {
-    setSavedPlaces(prev => prev.filter(p => p.id !== id));
-    setTrips(prev => prev.map((trip) => normalizeTrip({
+  const removePlace = async (targetPlaceOrId) => {
+    const targetPlace = typeof targetPlaceOrId === 'object' && targetPlaceOrId
+      ? targetPlaceOrId
+      : savedPlaces.find((place) => safeStr(place.id) === safeStr(targetPlaceOrId));
+    const targetId = safeStr(targetPlace?.id || targetPlaceOrId);
+    const targetIdentityKey = targetPlace
+      ? placeIdentityKey(targetPlace, targetPlace.city || currentCity)
+      : '';
+
+    // 删除时同时按 id 和地点身份键匹配，避免同一地点因不同来源生成多个 id 时看起来“删不掉”。
+    const matchedPlaces = savedPlaces.filter((place) => {
+      const sameId = safeStr(place.id) === targetId;
+      const sameIdentity = targetIdentityKey
+        ? placeIdentityKey(place, place.city || currentCity) === targetIdentityKey
+        : false;
+      return sameId || sameIdentity;
+    });
+    const idsToRemove = new Set(
+      matchedPlaces
+        .map((place) => safeStr(place.id))
+        .concat(targetId)
+        .filter(Boolean)
+    );
+
+    if (idsToRemove.size === 0) return;
+
+    const stripPlaceIdsFromTrip = (trip) => normalizeTrip({
       ...trip,
-      places: (trip.places || []).filter((pid) => pid !== id),
+      places: (trip.places || []).filter((pid) => !idsToRemove.has(safeStr(pid))),
       days: Array.isArray(trip.days)
-        ? trip.days.map((day) => ({ ...day, places: (day.places || []).filter((pid) => pid !== id) }))
+        ? trip.days.map((day) => ({
+            ...day,
+            places: (day.places || []).filter((pid) => !idsToRemove.has(safeStr(pid))),
+          }))
         : trip.days,
-    })));
+    });
+
+    setSavedPlaces((prev) => prev.filter((place) => !idsToRemove.has(safeStr(place.id))));
+    setTrips((prev) => prev.map(stripPlaceIdsFromTrip));
+
     if (user && !user.is_anonymous && supabase) {
-      try { await supabase.from('places').delete().eq('id', id); } catch(e){ logCloudError('Remove place', e); }
       try {
-        const impacted = trips.filter((trip) => flattenTripPlaceIds(trip).includes(id));
-        for (const trip of impacted) {
-          const nextTrip = normalizeTrip({
-            ...trip,
-            places: (trip.places || []).filter((pid) => pid !== id),
-            days: Array.isArray(trip.days)
-              ? trip.days.map((day) => ({ ...day, places: (day.places || []).filter((pid) => pid !== id) }))
-              : trip.days,
-          });
-          await supabase.from('trips').update({ places: nextTrip.places, days: nextTrip.days }).eq('id', trip.id);
+        for (const placeId of idsToRemove) {
+          await supabase.from('places').delete().eq('id', placeId).eq('user_id', user.id);
         }
-      } catch(e) { logCloudError('Sync trip places after remove place', e); }
+      } catch (e) {
+        logCloudError('Remove place', e);
+      }
+
+      try {
+        const impacted = trips.filter((trip) =>
+          flattenTripPlaceIds(trip).some((pid) => idsToRemove.has(safeStr(pid)))
+        );
+        for (const trip of impacted) {
+          const nextTrip = stripPlaceIdsFromTrip(trip);
+          await supabase
+            .from('trips')
+            .update({ places: nextTrip.places, days: nextTrip.days })
+            .eq('id', trip.id);
+        }
+      } catch (e) {
+        logCloudError('Sync trip places after remove place', e);
+      }
     }
   };
 
@@ -1933,7 +1972,7 @@ export default function App() {
                                 <MapPin size={10} className="mt-[3px] shrink-0" /> <span className="min-w-0 break-words">{normalizeAddressText(spot)}</span>
                               </p>
                             </div>
-                            <button onClick={(e) => { e.stopPropagation(); removePlace(spot.id); }} className="text-slate-300 hover:text-red-400 p-2 rounded-full hover:bg-red-50 transition-colors">
+                            <button onClick={(e) => { e.stopPropagation(); removePlace(spot); }} className="text-slate-300 hover:text-red-400 p-2 rounded-full hover:bg-red-50 transition-colors">
                               <Trash2 size={16} />
                             </button>
                           </div>
