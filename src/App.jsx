@@ -183,6 +183,48 @@ const normalizeAddressText = (placeData) => {
   return '地址待补全';
 };
 
+const isPlaceholderAddress = (value) => /^(地图标记地点|地址待补全)$/.test(safeStr(value).trim());
+
+const normalizeSavedPlaceRecord = (placeData, fallbackCity = '', existingPlace = null) => {
+  const nextDistrict = safeStr(placeData?.district || existingPlace?.district).trim();
+  const rawAddress = stripDistrictPrefix(
+    safeStr(placeData?.address) || safeStr(existingPlace?.address),
+    nextDistrict,
+  );
+  const displayAddress = normalizeAddressText({
+    district: nextDistrict,
+    address: rawAddress,
+  });
+
+  return {
+    id: safeStr(placeData?.id) || safeStr(existingPlace?.id) || Date.now().toString(),
+    name: safeStr(placeData?.name) || safeStr(existingPlace?.name) || '未知地点',
+    location: normalizePlaceLocation(placeData?.location || existingPlace?.location),
+    category: safeStr(placeData?.category) || safeStr(existingPlace?.category) || '景点',
+    address: displayAddress === '地址待补全' ? '地址待补全' : rawAddress,
+    district: nextDistrict,
+    city: inferCityName({ ...existingPlace, ...placeData, district: nextDistrict }, fallbackCity || safeStr(existingPlace?.city)),
+    savedAt: Number(placeData?.savedAt || existingPlace?.savedAt) || Date.now(),
+  };
+};
+
+const normalizeSearchCandidate = (item, fallbackCity = '') => {
+  if (!item) return null;
+  const location = normalizePlaceLocation(item.location);
+  const district = safeStr(item?.district).trim();
+  const address = stripDistrictPrefix(safeStr(item?.address), district);
+  return {
+    ...item,
+    id: safeStr(item?.id) || (location ? `${safeStr(item?.name)}_${location.lng}_${location.lat}` : safeStr(item?.name)),
+    name: safeStr(item?.name),
+    address,
+    district,
+    category: safeStr(item?.category || item?.type) || '地点',
+    location,
+    city: inferCityName({ ...item, district }, fallbackCity),
+  };
+};
+
 const placeIdentityKey = (placeData, fallbackCity = '') => {
   const city = inferCityName(placeData, fallbackCity);
   const name = safeStr(placeData?.name).replace(/\s+/g, '').toLowerCase();
@@ -556,7 +598,7 @@ export default function App() {
   const [savedPlaces, setSavedPlaces] = useState(() => {
     try {
       const local = localStorage.getItem('travel_saved_places');
-      return local ? JSON.parse(local) : [];
+      return local ? JSON.parse(local).map((item) => normalizeSavedPlaceRecord(item)).filter(Boolean) : [];
     } catch { return []; }
   });
   const deletedPlaceIdsRef = useRef((() => {
@@ -704,10 +746,8 @@ export default function App() {
     setSavedPlaces((prev) => {
       const map = new Map();
       prev.forEach((item) => {
-        map.set(placeIdentityKey(item, safeStr(item.city) || currentCity), {
-          ...item,
-          address: normalizeAddressText(item),
-        });
+        const normalizedItem = normalizeSavedPlaceRecord(item, safeStr(item.city) || currentCity);
+        map.set(placeIdentityKey(normalizedItem, safeStr(normalizedItem.city) || currentCity), normalizedItem);
       });
       return Array.from(map.values()).sort((a, b) => Number(b.savedAt || 0) - Number(a.savedAt || 0));
     });
@@ -744,10 +784,10 @@ export default function App() {
           if (pRes.data) {
             setSavedPlaces((prev) => {
               const deletedIds = deletedPlaceIdsRef.current;
-              const merged = new Map(prev.map((item) => [item.id, item]));
+              const merged = new Map(prev.map((item) => [item.id, normalizeSavedPlaceRecord(item, safeStr(item.city) || currentCity)]));
               pRes.data
                 .filter((item) => !deletedIds.has(safeStr(item.id)))
-                .forEach((item) => merged.set(item.id, item));
+                .forEach((item) => merged.set(item.id, normalizeSavedPlaceRecord(item, safeStr(item.city) || currentCity, merged.get(item.id))));
               return Array.from(merged.values()).sort((a, b) => Number(b.savedAt || 0) - Number(a.savedAt || 0));
             });
           }
@@ -857,11 +897,13 @@ export default function App() {
         const mergedResults = [];
         const seen = new Set();
         const append = (item) => {
-          if (!item) return;
-          const key = `${safeStr(item.name)}|${safeStr(item.address)}|${safeStr(item.location?.lng)}|${safeStr(item.location?.lat)}`;
+          const normalizedItem = normalizeSearchCandidate(item, currentCity);
+          if (!normalizedItem?.name) return;
+          if (!normalizedItem.location && !safeStr(normalizedItem.address) && !safeStr(normalizedItem.district)) return;
+          const key = `${safeStr(normalizedItem.name)}|${safeStr(normalizedItem.address)}|${safeStr(normalizedItem.location?.lng)}|${safeStr(normalizedItem.location?.lat)}`;
           if (seen.has(key)) return;
           seen.add(key);
-          mergedResults.push(item);
+          mergedResults.push(normalizedItem);
         };
         const done = () => {
           if (searchRequestRef.current !== requestId) return;
@@ -960,11 +1002,12 @@ export default function App() {
         const mergedResults = [];
         const seen = new Set();
         const append = (item) => {
-          if (!item) return;
-          const key = `${safeStr(item.name)}|${safeStr(item.address)}|${safeStr(item.location?.lng)}|${safeStr(item.location?.lat)}`;
+          const normalizedItem = normalizeSearchCandidate(item, currentCity);
+          if (!normalizedItem?.name) return;
+          const key = `${safeStr(normalizedItem.name)}|${safeStr(normalizedItem.address)}|${safeStr(normalizedItem.location?.lng)}|${safeStr(normalizedItem.location?.lat)}`;
           if (seen.has(key)) return;
           seen.add(key);
-          mergedResults.push(item);
+          mergedResults.push(normalizedItem);
         };
         await Promise.allSettled([
           new Promise((resolve) => {
@@ -1159,8 +1202,16 @@ export default function App() {
   // ==========================================
   const upsertSavedPlaceLocally = (placeData, dedupeKey) => {
     setSavedPlaces((prev) => {
-      const filtered = prev.filter((place) => placeIdentityKey(place, place.city || currentCity) !== dedupeKey && safeStr(place.id) !== safeStr(placeData.id));
-      return [placeData, ...filtered].sort((a, b) => Number(b.savedAt || 0) - Number(a.savedAt || 0));
+      const existingPlace = prev.find((place) => (
+        placeIdentityKey(place, place.city || currentCity) === dedupeKey ||
+        safeStr(place.id) === safeStr(placeData.id)
+      ));
+      const normalizedPlace = normalizeSavedPlaceRecord(placeData, currentCity, existingPlace);
+      const filtered = prev.filter((place) => (
+        placeIdentityKey(place, place.city || currentCity) !== dedupeKey &&
+        safeStr(place.id) !== safeStr(normalizedPlace.id)
+      ));
+      return [normalizedPlace, ...filtered].sort((a, b) => Number(b.savedAt || 0) - Number(a.savedAt || 0));
     });
   };
 
@@ -1169,7 +1220,7 @@ export default function App() {
     const inferredCity = inferCityName(placeData, currentCity);
     const dedupeKey = placeIdentityKey(placeData, currentCity);
     const existingByKey = savedPlaces.find((place) => placeIdentityKey(place, inferredCity) === dedupeKey);
-    const optimisticPlace = {
+    const optimisticPlace = normalizeSavedPlaceRecord({
       id: existingByKey?.id || placeData.id || Date.now().toString(),
       name: placeName,
       location: normalizePlaceLocation(placeData.location),
@@ -1178,7 +1229,7 @@ export default function App() {
       district: safeStr(placeData.district) || safeStr(existingByKey?.district) || '',
       city: inferredCity,
       savedAt: Date.now()
-    };
+    }, currentCity, existingByKey);
     upsertSavedPlaceLocally(optimisticPlace, dedupeKey);
     persistDeletedPlaceIds(new Set([...deletedPlaceIdsRef.current].filter((id) => id !== safeStr(optimisticPlace.id))));
     const actionToken = ++favoriteActionTokenRef.current;
@@ -1190,11 +1241,11 @@ export default function App() {
     resolveAddressForPlace(placeData)
       .then((resolvedAddress) => {
         if (favoriteActionTokenRef.current < actionToken) return;
-        const hydratedPlace = {
+        const hydratedPlace = normalizeSavedPlaceRecord({
           ...optimisticPlace,
           address: safeStr(resolvedAddress.address) || optimisticPlace.address,
           district: safeStr(resolvedAddress.district) || optimisticPlace.district,
-        };
+        }, currentCity, optimisticPlace);
         upsertSavedPlaceLocally(hydratedPlace, dedupeKey);
         if (user && !user.is_anonymous && supabase) {
           supabase.from('places').upsert({ ...hydratedPlace, user_id: user.id }).catch((e) => logCloudError('Save hydrated place', e));
@@ -1279,7 +1330,7 @@ export default function App() {
   const resolveAddressForPlace = async (placeData) => {
     const location = getLngLat(placeData?.location);
     const direct = safeMergeAddress(placeData?.district, placeData?.address);
-    if (direct && !/地图标记地点|地址待补全/.test(direct)) {
+    if (direct && !isPlaceholderAddress(direct)) {
       return {
         address: stripDistrictPrefix(placeData?.address, placeData?.district),
         district: safeStr(placeData?.district),
@@ -1360,7 +1411,7 @@ export default function App() {
     const resolvedAddress = await resolveAddressForPlace(placeData);
     const dedupeKey = placeIdentityKey(placeData, currentCity);
     const existingByKey = savedPlaces.find((place) => placeIdentityKey(place, inferredCity) === dedupeKey);
-    const newPlace = {
+    const newPlace = normalizeSavedPlaceRecord({
       id: existingByKey?.id || placeData?.id || Date.now().toString(),
       name: placeName,
       location: normalizePlaceLocation(placeData?.location),
@@ -1369,7 +1420,7 @@ export default function App() {
       district: safeStr(resolvedAddress.district) || safeStr(placeData?.district) || safeStr(existingByKey?.district) || '',
       city: inferredCity,
       savedAt: existingByKey?.savedAt || Date.now(),
-    };
+    }, currentCity, existingByKey);
     upsertSavedPlaceLocally(newPlace, dedupeKey);
     if (user && !user.is_anonymous && supabase) {
       try {
