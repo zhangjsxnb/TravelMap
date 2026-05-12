@@ -199,6 +199,19 @@ const normalizeTrip = (trip) => {
   };
 };
 
+const normalizeTripsList = (list = []) => Array.isArray(list) ? list.map(normalizeTrip).filter(Boolean) : [];
+
+const mergeTripLists = (localTrips = [], cloudTrips = []) => {
+  const merged = new Map();
+  normalizeTripsList(localTrips).forEach((trip) => {
+    merged.set(trip.id, trip);
+  });
+  normalizeTripsList(cloudTrips).forEach((trip) => {
+    merged.set(trip.id, trip);
+  });
+  return Array.from(merged.values());
+};
+
 // ==========================================
 // 地图核心组件
 // ==========================================
@@ -566,7 +579,23 @@ export default function App() {
               return Array.from(merged.values()).sort((a, b) => Number(b.savedAt || 0) - Number(a.savedAt || 0));
             });
           }
-          if (tRes.data) setTrips(tRes.data.map(normalizeTrip));
+          if (tRes.data) {
+            const cloudTrips = normalizeTripsList(tRes.data);
+            setTrips((prev) => mergeTripLists(prev, cloudTrips));
+
+            const localTrips = normalizeTripsList(JSON.parse(localStorage.getItem('travel_trips') || '[]'));
+            const cloudIds = new Set(cloudTrips.map((trip) => trip.id));
+            const missingLocalTrips = localTrips.filter((trip) => !cloudIds.has(trip.id));
+            if (missingLocalTrips.length > 0) {
+              try {
+                await supabase.from('trips').upsert(
+                  missingLocalTrips.map((trip) => ({ ...trip, user_id: user.id })),
+                );
+              } catch (e) {
+                logCloudError('Sync local trips to cloud', e);
+              }
+            }
+          }
           if (mRes.data) setGlobalMemos(mRes.data);
         } catch(e) { console.error('Cloud fetch error', e); }
       };
