@@ -55,9 +55,6 @@ const SUPABASE_CONFIG = {
   key: import.meta.env.VITE_SUPABASE_KEY || '',
 };
 
-const AI_PLAN_API_URL = import.meta.env.VITE_AI_PLAN_API_URL || '';
-const AI_PLAN_BEARER_TOKEN = import.meta.env.VITE_AI_PLAN_BEARER_TOKEN || '';
-
 const COLORS = {
   white: '#FFFFFF',
   bg: '#F4EEEB',
@@ -439,14 +436,7 @@ export default function App() {
   const [editingMemoId, setEditingMemoId] = useState(null);
   const [editingMemoText, setEditingMemoText] = useState('');
 
-  // AI 智能规划状态
-  const [isSmartPlanning, setIsSmartPlanning] = useState(false);
-  const [aiChatOpen, setAiChatOpen] = useState(false);
-  const [aiChatInput, setAiChatInput] = useState('');
-  const [aiConversation, setAiConversation] = useState([]);
-  const [aiProposal, setAiProposal] = useState(null);
-  const [aiDraftStayMinutesByPlace, setAiDraftStayMinutesByPlace] = useState({});
-  const [dayStartTimes, setDayStartTimes] = useState(() => {
+  const [dayStartTimes] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('travel_day_start_times') || '{}');
     } catch {
@@ -470,7 +460,7 @@ export default function App() {
   const [segmentModes, setSegmentModes] = useState([]); 
   const [segmentRoutes, setSegmentRoutes] = useState([]); 
   const [, setIsCalculatingSegments] = useState(false);
-  const [stayMinutesByPlace, setStayMinutesByPlace] = useState(() => {
+  const [stayMinutesByPlace] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('travel_stay_minutes') || '{}');
     } catch {
@@ -516,7 +506,6 @@ export default function App() {
   });
 
   const autoComplete = useRef(null);
-  const aiRequestingRef = useRef(false);
   const routeCacheRef = useRef(new Map());
   const searchRequestRef = useRef(0);
   const itinerarySearchRequestRef = useRef(0);
@@ -829,208 +818,6 @@ export default function App() {
     }, 250);
     return () => clearTimeout(timer);
   }, [itinerarySearchQuery, showRoutePanel, currentCity, mapStatus]);
-
-  // ==========================================
-  // AI 核心调用逻辑
-  // ==========================================
-  const callAiPlanner = async (payload) => {
-    if (!AI_PLAN_API_URL) {
-      alert('请先配置 VITE_AI_PLAN_API_URL，并通过后端代理调用 AI。');
-      return null;
-    }
-    try {
-      const res = await fetch(AI_PLAN_API_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(AI_PLAN_BEARER_TOKEN ? { Authorization: `Bearer ${AI_PLAN_BEARER_TOKEN}` } : {}),
-        },
-        body: JSON.stringify(payload)
-      });
-      if (!res.ok) throw new Error(`AI proxy returned ${res.status}`);
-      const data = await res.json();
-      return data;
-    } catch (e) {
-      console.error("AI Planner API Error:", e);
-      alert("AI 调用失败，请检查代理服务或网络");
-      return null;
-    }
-  };
-
-  const parseDeepSeekJSON = (text) => {
-    if (!text) return null;
-    let cleaned = text.replace(/```json/gi, '').replace(/```/g, '').trim();
-    const firstArray = cleaned.indexOf('[');
-    const lastArray = cleaned.lastIndexOf(']');
-    const firstObj = cleaned.indexOf('{');
-    const lastObj = cleaned.lastIndexOf('}');
-    if (firstObj !== -1 && lastObj !== -1 && (firstArray === -1 || firstObj < firstArray)) {
-      cleaned = cleaned.substring(firstObj, lastObj + 1);
-    } else if (firstArray !== -1 && lastArray !== -1) {
-      cleaned = cleaned.substring(firstArray, lastArray + 1);
-    }
-    try {
-      return JSON.parse(cleaned);
-    } catch (e) {
-      console.error("JSON parse error:", e);
-      return null;
-    }
-  };
-
-  const normalizePlanPayload = (payload) => {
-    if (!payload) return null;
-    if (Array.isArray(payload)) {
-      return {
-        routes: [{ title: `${currentCity} AI定制路线`, placeIds: payload }]
-      };
-    }
-    if (Array.isArray(payload.placeIds)) {
-      return {
-        routes: [{ title: safeStr(payload.title) || `${currentCity} AI定制路线`, placeIds: payload.placeIds }]
-      };
-    }
-    if (Array.isArray(payload.days)) {
-      return {
-        routes: payload.days.map((day, idx) => ({
-          title: safeStr(day?.title) || `Day ${idx + 1}`,
-          placeIds: Array.isArray(day?.placeIds) ? day.placeIds : [],
-        })),
-        summary: safeStr(payload.summary),
-      };
-    }
-    if (Array.isArray(payload.routes)) return payload;
-    return null;
-  };
-
-  const validatePlanPayload = (payload, cityPlaces) => {
-    if (!payload || !Array.isArray(payload.routes)) return { ok: false, reason: 'AI 未返回 routes 数组' };
-    const validIds = new Set(cityPlaces.map((place) => place.id));
-    const usedIds = new Set();
-    const safeRoutes = payload.routes.map((route, index) => {
-      const title = safeStr(route?.title) || `Day ${index + 1}`;
-      const placeIds = Array.isArray(route?.placeIds)
-        ? route.placeIds.filter((id) => validIds.has(id)).filter((id) => {
-            if (usedIds.has(id)) return false;
-            usedIds.add(id);
-            return true;
-          })
-        : [];
-      return { title, placeIds };
-    }).filter((route) => route.placeIds.length > 0);
-    if (!safeRoutes.length) return { ok: false, reason: 'AI 路线没有包含有效收藏地点' };
-    return { ok: true, payload: { ...payload, routes: safeRoutes } };
-  };
-
-  const buildTripsFromPlan = (planPayload, cityPlaces) => {
-    const used = new Set();
-    const safeRoutes = (planPayload?.routes || []).map((route, index) => {
-      const ids = (route?.placeIds || [])
-        .filter((id) => cityPlaces.some((place) => place.id === id))
-        .filter((id) => {
-          if (used.has(id)) return false;
-          used.add(id);
-          return true;
-        });
-      if (ids.length === 0) return null;
-      return {
-        id: `day_${index + 1}`,
-        title: safeStr(route?.title) || `Day ${index + 1}`,
-        places: ids
-      };
-    }).filter(Boolean);
-    if (!safeRoutes.length) return [];
-    return [normalizeTrip({
-      id: `trip_${Date.now()}`,
-      name: `${currentCity} AI行程`,
-      days: safeRoutes,
-    })];
-  };
-
-  const applyProposedTrips = async (newTrips) => {
-    if (!newTrips?.length) {
-      alert('AI 方案里没有可执行的收藏地点，请先补充收藏。');
-      return;
-    }
-    const normalizedTrips = newTrips.map((trip) => normalizeTrip(trip));
-    const tripsToAdd = [...normalizedTrips].reverse();
-    setTrips((prev) => [...tripsToAdd, ...prev]);
-    if (user && !user.is_anonymous && supabase) {
-      try {
-        const cloudTrips = normalizedTrips.map((trip) => ({ ...trip, user_id: user.id }));
-        await supabase.from('trips').upsert(cloudTrips);
-      } catch (error) {
-        logCloudError('Sync AI trips', error);
-      }
-    }
-    setActiveTripId(normalizedTrips[normalizedTrips.length - 1].id);
-    setShowRoutePanel(true);
-    setActiveTab('lists');
-  };
-
-
-
-  const sendAiChatPlan = async () => {
-    if (aiRequestingRef.current) return;
-    if (!aiChatInput.trim()) return;
-    const userText = aiChatInput.trim();
-    const cityPlaces = savedPlaces.filter((place) => place.city === currentCity);
-    if (cityPlaces.length < 2) {
-      alert('当前城市收藏太少，至少收藏 2 个地点后再试。');
-      return;
-    }
-    setIsSmartPlanning(true);
-    aiRequestingRef.current = true;
-    setAiConversation((prev) => [...prev, { role: 'user', text: userText }]);
-    setAiChatInput('');
-
-    const answer = await callAiPlanner({
-      action: 'plan',
-      prompt: userText,
-      city: currentCity,
-      places: cityPlaces.map((place) => ({
-        id: place.id,
-        name: place.name,
-        category: place.category,
-        address: place.address
-      })),
-      currentTrip: activeTripId ? (trips.find((trip) => trip.id === activeTripId) || null) : null,
-      preferences: {
-        dayStartAt: '10:00',
-        targetStopsPerDay: 6
-      }
-    });
-    const contentText = answer?.content || answer?.text || answer?.choices?.[0]?.message?.content || '';
-    const parsed = answer?.proposal || parseDeepSeekJSON(contentText || '') || (() => {
-      try { return JSON.parse(contentText || '{}'); } catch { return null; }
-    })();
-    const normalized = normalizePlanPayload(parsed) || {
-      routes: [{
-        title: `${currentCity} AI路线`,
-        placeIds: cityPlaces.slice(0, 6).map((p) => p.id),
-      }],
-      summary: 'AI 返回格式不稳定，已为你生成可执行兜底路线。',
-    };
-    const validated = validatePlanPayload(normalized, cityPlaces);
-    if (!validated.ok) {
-      setAiConversation((prev) => [...prev, { role: 'assistant', text: `提案校验失败：${validated.reason}，请换个需求重试。` }]);
-      setIsSmartPlanning(false);
-      aiRequestingRef.current = false;
-      return;
-    }
-    const proposalTrips = buildTripsFromPlan(validated.payload, cityPlaces);
-
-    if (!proposalTrips.length) {
-      setAiConversation((prev) => [...prev, { role: 'assistant', text: '我没有拿到可执行路线，请换个需求再试。' }]);
-      setIsSmartPlanning(false);
-      return;
-    }
-
-    setAiProposal({ trips: proposalTrips, summary: safeStr(parsed?.summary) });
-    setAiDraftStayMinutesByPlace({});
-    setAiConversation((prev) => [...prev, { role: 'assistant', text: safeStr(parsed?.summary) || `已生成 ${proposalTrips.length} 条可执行路线，确认后可一键加入。` }]);
-    setIsSmartPlanning(false);
-    aiRequestingRef.current = false;
-  };
 
   const activeTrip = useMemo(() => (
     activeTripId ? normalizeTrip(trips.find((trip) => trip.id === activeTripId)) : null
@@ -1663,17 +1450,6 @@ export default function App() {
     }));
   };
 
-  const removePlaceFromDay = async (placeId) => {
-    if (!activeTripId) return;
-    await updateTripDays(activeTripId, (normalized) => ({
-      ...normalized,
-      days: normalized.days.map((day, index) => {
-        if (index !== currentRouteDay - 1) return day;
-        return { ...day, places: (day.places || []).filter((id) => id !== placeId) };
-      }),
-    }));
-  };
-
   const updateTripDays = async (tripId, updater) => {
     let updatedTrip = null;
     setTrips((prevTrips) => prevTrips.map((trip) => {
@@ -1835,7 +1611,6 @@ export default function App() {
   const currentDayTransitMinutes = currentDayRows.reduce((sum, row) => sum + (row.transitMinute || 0), 0);
   const currentDayStayMinutes = currentDayRows.reduce((sum, row) => sum + (row.stayMinutes || 0), 0);
   const currentDayTotalMinutes = currentDayTransitMinutes + currentDayStayMinutes;
-  const currentDayStartAt = safeStr(dayStartTimes[dayStorageKey]) || '10:00';
 
   return (
     <div className="min-h-[100dvh] w-full flex justify-center bg-gray-100 sm:bg-[#f0f4f8]" style={{ fontFamily: '"PingFang SC","Hiragino Sans GB","Noto Sans SC","Microsoft YaHei",sans-serif' }}>
@@ -2027,14 +1802,6 @@ export default function App() {
                   <button onClick={() => setNewTripModalVisible(true)} className="w-10 h-10 rounded-full flex items-center justify-center bg-white shadow-sm active:scale-95"><Plus size={20} color={COLORS.primary}/></button>
                </div>
                <div className="flex-1 overflow-y-auto pb-24 space-y-4 pt-2 min-h-0">
-                  <button
-                    onClick={() => setAiChatOpen(true)}
-                    className="w-full mt-3 bg-white p-4 rounded-2xl border border-[#ced6df] text-left shadow-sm active:scale-95 transition-transform"
-                  >
-                    <p className="text-sm font-bold text-slate-700">AI 对话规划</p>
-                    <p className="text-[11px] text-slate-500 mt-1">输入需求后先生成提案，确认后再一键应用，结果更稳定</p>
-                  </button>
-
                   <div className="h-px bg-gray-200 my-4"></div>
 
                   <h3 className="font-bold text-slate-600">自定义行程</h3>
@@ -2343,73 +2110,6 @@ export default function App() {
                     setNewTripPlaceDayMap({});
                   }
                 }}>确认创建</button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {aiChatOpen && (
-          <div className="fixed inset-0 z-[165] flex items-end bg-black/40 backdrop-blur-sm animate-in fade-in">
-            <div className="bg-[#f8f6f2] w-full rounded-t-3xl p-6 pb-safe max-h-[85vh] flex flex-col">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h3 className="text-lg font-bold text-slate-800">AI 对话规划</h3>
-                  <p className="text-[11px] text-slate-500 mt-1">先生成提案，再确认应用，避免不可执行结果</p>
-                </div>
-                <button onClick={() => setAiChatOpen(false)} className="p-2 rounded-full bg-white"><X size={16} /></button>
-              </div>
-
-              <div className="flex-1 overflow-y-auto space-y-3 pr-1">
-                {aiConversation.length === 0 ? (
-                  <div className="text-xs text-slate-500 bg-white rounded-xl p-3 border border-[#e9e7e3]">
-                    示例：我想周末轻松逛 2 天，咖啡店加公园，最多 6 个点，步行少一点。
-                  </div>
-                ) : null}
-                {aiConversation.map((item, index) => (
-                  <div key={`chat_${index}`} className={`p-3 rounded-xl text-xs ${item.role === 'user' ? 'bg-[#ced6df] text-slate-700 ml-6' : 'bg-white text-slate-700 mr-6 border border-[#e9e7e3]'}`}>
-                    {item.text}
-                  </div>
-                ))}
-
-                {aiProposal ? (
-                  <div className="bg-white border border-[#ced6df] rounded-2xl p-4">
-                    <p className="text-sm font-bold text-slate-700 mb-2">提案预览</p>
-                    <p className="text-xs text-slate-500 mb-3">{aiProposal.summary || '已生成可执行行程提案。'}</p>
-                    <button
-                      onClick={async () => {
-                        await applyProposedTrips(aiProposal.trips || []);
-                        setStayMinutesByPlace((prev) => ({ ...prev, ...aiDraftStayMinutesByPlace }));
-                        if ((aiProposal.trips || []).length > 0) {
-                          const firstTrip = aiProposal.trips[0];
-                          setSegmentModes(new Array(Math.max(0, (firstTrip?.places?.length || 0) - 1)).fill('driving'));
-                        }
-                        setAiProposal(null);
-                        setAiChatOpen(false);
-                      }}
-                      className="w-full py-3 rounded-xl text-white text-sm font-bold"
-                      style={{ backgroundColor: COLORS.primary }}
-                    >
-                      应用提案到行程
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-
-              <div className="mt-4 flex gap-2">
-                <input
-                  value={aiChatInput}
-                  onChange={(event) => setAiChatInput(event.target.value)}
-                  placeholder="告诉 AI 你的偏好：天数、节奏、预算、体力..."
-                  className="flex-1 px-4 py-3 rounded-xl bg-white border border-[#ced6df] outline-none text-sm"
-                />
-                <button
-                  disabled={isSmartPlanning || !aiChatInput.trim()}
-                  onClick={sendAiChatPlan}
-                  className="px-5 rounded-xl text-white text-sm font-bold disabled:opacity-50"
-                  style={{ backgroundColor: COLORS.primary }}
-                >
-                  发送
-                </button>
               </div>
             </div>
           </div>
