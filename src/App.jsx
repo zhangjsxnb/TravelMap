@@ -209,7 +209,7 @@ const normalizeSavedPlaceRecord = (placeData, fallbackCity = '', existingPlace =
     name: safeStr(placeData?.name) || safeStr(existingPlace?.name) || '未知地点',
     location: normalizePlaceLocation(placeData?.location || existingPlace?.location),
     category: safeStr(placeData?.category) || safeStr(existingPlace?.category) || '景点',
-    address: displayAddress === '地址待补全' ? '地址待补全' : rawAddress,
+    address: displayAddress,
     district: nextDistrict,
     city: inferCityName({ ...existingPlace, ...placeData, district: nextDistrict }, fallbackCity || safeStr(existingPlace?.city)),
     savedAt: Number(placeData?.savedAt || existingPlace?.savedAt) || Date.now(),
@@ -256,6 +256,34 @@ const safeMergeAddress = (district, address) => {
 };
 
 const isNationwideCity = (city) => safeStr(city) === '全国';
+
+const getSuggestedViewport = (places = []) => {
+  const coords = places
+    .map((place) => getLngLat(place?.location))
+    .filter((item) => Array.isArray(item) && item.length === 2);
+
+  if (coords.length === 0) return null;
+
+  const lngs = coords.map(([lng]) => Number(lng));
+  const lats = coords.map(([, lat]) => Number(lat));
+  const minLng = Math.min(...lngs);
+  const maxLng = Math.max(...lngs);
+  const minLat = Math.min(...lats);
+  const maxLat = Math.max(...lats);
+  const span = Math.max(maxLng - minLng, maxLat - minLat);
+
+  let zoom = 10;
+  if (coords.length === 1 || span <= 0.01) zoom = 15;
+  else if (span <= 0.03) zoom = 14;
+  else if (span <= 0.08) zoom = 13;
+  else if (span <= 0.2) zoom = 12;
+  else if (span <= 0.5) zoom = 11;
+
+  return {
+    zoom,
+    center: [(minLng + maxLng) / 2, (minLat + maxLat) / 2],
+  };
+};
 
 const flattenTripPlaceIds = (trip) => {
   if (!trip) return [];
@@ -725,6 +753,7 @@ export default function App() {
     }
     return { zoom: 11, center: null };
   });
+  const routePanelSessionRef = useRef({ tripId: '', day: 0, visible: false });
   const [collapsedCities, setCollapsedCities] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('travel_collapsed_cities') || '{}');
@@ -780,6 +809,12 @@ export default function App() {
     () => savedPlaces.filter((place) => isNationwideCity(currentCity) || place.city === currentCity),
     [savedPlaces, currentCity],
   );
+
+  useEffect(() => {
+    if (mapView.center) return;
+    const suggested = getSuggestedViewport(cityFilteredPlaces);
+    if (suggested) setMapView((prev) => (prev.center ? prev : suggested));
+  }, [cityFilteredPlaces, mapView.center]);
 
   const persistDeletedPlaceIds = (nextIds) => {
     deletedPlaceIdsRef.current = new Set(Array.from(nextIds).map((id) => safeStr(id)).filter(Boolean));
@@ -1282,6 +1317,16 @@ export default function App() {
       setSelectedPlace(null);
       exitSearch();
     }
+  };
+
+  const handleMapPlaceAction = (placeData) => {
+    const dedupeKey = placeIdentityKey(placeData, currentCity);
+    const existingPlace = savedPlaces.find((place) => placeIdentityKey(place, place.city || currentCity) === dedupeKey);
+    if (existingPlace) {
+      setSelectedPlace(existingPlace);
+      return;
+    }
+    void handleSavePlace(placeData, false);
   };
 
   const removePlace = async (targetPlaceOrId) => {
@@ -1845,6 +1890,37 @@ export default function App() {
       .map((pid) => savedPlacesById.get(safeStr(pid)))
       .filter(Boolean)
   ), [currentDayPlaceIds, savedPlacesById]);
+
+  useEffect(() => {
+    if (!showRoutePanel || !activeTripId) {
+      routePanelSessionRef.current = { tripId: '', day: 0, visible: false };
+      return;
+    }
+
+    const session = routePanelSessionRef.current;
+    const nextSuggested = getSuggestedViewport(currentDayTripPlaces);
+    const isNewSession =
+      !session.visible ||
+      session.tripId !== safeStr(activeTripId) ||
+      session.day !== Number(currentRouteDay);
+
+    if (isNewSession && nextSuggested) {
+      setRouteMapView(nextSuggested);
+      routePanelSessionRef.current = {
+        tripId: safeStr(activeTripId),
+        day: Number(currentRouteDay),
+        visible: true,
+      };
+      return;
+    }
+
+    routePanelSessionRef.current = {
+      tripId: safeStr(activeTripId),
+      day: Number(currentRouteDay),
+      visible: true,
+    };
+  }, [showRoutePanel, activeTripId, currentRouteDay, currentDayTripPlaces]);
+
   const timelineRows = useMemo(() => {
     const dayStartAt = safeStr(dayStartTimes[dayStorageKey]) || '10:00';
     const initialMinute = toMinute(dayStartAt);
@@ -2050,7 +2126,7 @@ export default function App() {
                       lockViewport={lockMapViewport}
                       mapView={mapView}
                       onMapViewChange={setMapView}
-                      onMarkerClick={(p) => setSelectedPlace(p)}
+                      onMarkerClick={handleMapPlaceAction}
                       visible={activeTab === 'map'}
                       className="rounded-[32px] shadow-inner"
                       heightClassName="h-[360px] sm:h-[420px]"
