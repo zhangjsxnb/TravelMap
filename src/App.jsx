@@ -138,9 +138,39 @@ const getLngLat = (loc) => {
   return null;
 };
 
+const toAMapLngLat = (loc) => {
+  const coords = getLngLat(loc);
+  if (!coords || !window.AMap?.LngLat) return coords;
+  return new window.AMap.LngLat(coords[0], coords[1]);
+};
+
+const escapeRegExp = (value) => safeStr(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const normalizeDistrictText = (district) => safeStr(district).replace(/\s+/g, '').trim();
+
+const stripDistrictPrefix = (address, district) => {
+  const rawAddress = safeStr(address).trim();
+  const normalizedDistrict = normalizeDistrictText(district);
+  if (!rawAddress || !normalizedDistrict) return rawAddress;
+
+  const compactAddress = rawAddress.replace(/\s+/g, '');
+  if (compactAddress.startsWith(normalizedDistrict)) {
+    const remaining = compactAddress.slice(normalizedDistrict.length).trim();
+    return remaining || rawAddress;
+  }
+
+  const districtPattern = new RegExp(`^${escapeRegExp(normalizedDistrict)}[\\s,-]*`, 'i');
+  return rawAddress.replace(districtPattern, '').trim() || rawAddress;
+};
+
+const normalizePlaceLocation = (location) => {
+  const coords = getLngLat(location);
+  return coords ? { lng: coords[0], lat: coords[1] } : null;
+};
+
 const normalizeAddressText = (placeData) => {
-  const address = safeStr(placeData?.address).trim();
   const district = safeStr(placeData?.district).trim();
+  const address = stripDistrictPrefix(placeData?.address, district);
   const merged = address && address !== '地图标记地点' ? (district ? `${district} ${address}` : address) : district;
   if (merged) {
     const deduped = merged
@@ -233,12 +263,12 @@ const buildPlacesSignature = (places = [], isRoute = false) => places
   .join('|');
 
 const createMarkerContent = (labelText) => `
-  <div style="position:relative;display:flex;align-items:flex-start;justify-content:center;width:32px;height:44px;">
+  <div style="position:relative;display:flex;align-items:flex-start;justify-content:center;width:32px;height:44px;overflow:visible;">
     <div style="position:absolute;top:0;left:50%;transform:translateX(-50%);min-width:18px;height:18px;padding:0 4px;border:2px solid #4C6FFF;border-radius:2px;background:#FFFFFF;color:#1F2937;font-size:12px;font-weight:700;line-height:14px;display:flex;align-items:center;justify-content:center;box-sizing:border-box;white-space:nowrap;">
       ${String(labelText ?? '')}
     </div>
-    <div style="position:absolute;left:50%;bottom:0;transform:translateX(-50%);width:18px;height:28px;background:linear-gradient(180deg,#5EA7FF 0%,#347DFF 100%);border-radius:12px 12px 12px 0;transform-origin:center bottom;rotate:-45deg;box-shadow:0 4px 10px rgba(52,125,255,0.22);"></div>
-    <div style="position:absolute;left:50%;bottom:13px;transform:translateX(-50%);width:8px;height:8px;border-radius:9999px;background:#FFFFFF;"></div>
+    <div style="position:absolute;left:50%;bottom:0;transform:translateX(-50%);width:18px;height:24px;background:linear-gradient(180deg,#5EA7FF 0%,#347DFF 100%);border-radius:9px 9px 9px 0;rotate:-45deg;box-shadow:0 4px 10px rgba(52,125,255,0.22);"></div>
+    <div style="position:absolute;left:50%;bottom:10px;transform:translateX(-50%);width:8px;height:8px;border-radius:9999px;background:#FFFFFF;"></div>
   </div>
 `;
 
@@ -365,13 +395,12 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
       markersRef.current = [];
 
       places.forEach((p, idx) => {
-        const coords = getLngLat(p.location);
-        if (!coords) return;
+        const position = toAMapLngLat(p.location);
+        if (!position) return;
         const marker = new window.AMap.Marker({
-          position: coords,
+          position,
           cursor: markerClickRef.current ? 'pointer' : 'default',
           anchor: 'bottom-center',
-          offset: new window.AMap.Pixel(-16, -44),
           content: createMarkerContent(isRoute ? idx + 1 : safeStr(p.name)),
           extData: p,
           zIndex: 100 + idx,
@@ -412,10 +441,13 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
       const validSegments = routeSegments.length === places.length - 1;
       if (validSegments) {
         routeSegments.forEach((segment, i) => {
-          const start = getLngLat(places[i]?.location);
-          const end = getLngLat(places[i + 1]?.location);
+          const start = toAMapLngLat(places[i]?.location);
+          const end = toAMapLngLat(places[i + 1]?.location);
           const directPath = [start, end].filter(Boolean);
-          const path = directPath.length >= 2 ? directPath : Array.isArray(segment?.path) ? segment.path.filter(Boolean) : [];
+          const normalizedSegmentPath = Array.isArray(segment?.path)
+            ? segment.path.map((point) => toAMapLngLat(point)).filter(Boolean)
+            : [];
+          const path = directPath.length >= 2 ? directPath : normalizedSegmentPath;
           if (path.length >= 2) {
             const polyline = new window.AMap.Polyline({
               path,
@@ -433,7 +465,7 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
           }
         });
       } else {
-        const path = places.map(p => getLngLat(p.location)).filter(Boolean);
+        const path = places.map((p) => toAMapLngLat(p.location)).filter(Boolean);
         if (path.length >= 2) {
           const polyline = new window.AMap.Polyline({
             path,
@@ -1084,9 +1116,9 @@ export default function App() {
     const newPlace = {
       id: existingByKey?.id || placeData.id || Date.now().toString(),
       name: placeName,
-      location: placeData.location,
+      location: normalizePlaceLocation(placeData.location),
       category: safeStr(placeData.category) || '景点',
-      address: safeStr(resolvedAddress.address) || normalizeAddressText(placeData),
+      address: safeStr(resolvedAddress.address) || stripDistrictPrefix(placeData?.address, placeData?.district),
       district: safeStr(resolvedAddress.district) || safeStr(placeData.district) || safeStr(existingByKey?.district) || '',
       city: inferredCity,
       savedAt: Date.now()
@@ -1180,7 +1212,7 @@ export default function App() {
     const direct = safeMergeAddress(placeData?.district, placeData?.address);
     if (direct && !/地图标记地点|地址待补全/.test(direct)) {
       return {
-        address: normalizeAddressText(placeData),
+        address: stripDistrictPrefix(placeData?.address, placeData?.district),
         district: safeStr(placeData?.district),
       };
     }
@@ -1213,7 +1245,7 @@ export default function App() {
         if (resolved) {
           return {
             district: resolved.district,
-            address: safeMergeAddress(resolved.district, resolved.address),
+            address: stripDistrictPrefix(resolved.address, resolved.district),
           };
         }
       } catch (error) {
@@ -1242,7 +1274,7 @@ export default function App() {
         if (resolved) {
           return {
             district: resolved.district,
-            address: safeMergeAddress(resolved.district, resolved.address),
+            address: stripDistrictPrefix(resolved.address, resolved.district),
           };
         }
       } catch (error) {
@@ -1262,9 +1294,9 @@ export default function App() {
     const newPlace = {
       id: existingByKey?.id || placeData?.id || Date.now().toString(),
       name: placeName,
-      location: placeData?.location,
+      location: normalizePlaceLocation(placeData?.location),
       category: safeStr(placeData?.category) || '景点',
-      address: safeStr(resolvedAddress.address) || normalizeAddressText(placeData),
+      address: safeStr(resolvedAddress.address) || stripDistrictPrefix(placeData?.address, placeData?.district),
       district: safeStr(resolvedAddress.district) || safeStr(placeData?.district) || safeStr(existingByKey?.district) || '',
       city: inferredCity,
       savedAt: existingByKey?.savedAt || Date.now(),
@@ -2500,7 +2532,7 @@ export default function App() {
             <div className="flex-1 min-w-0 pr-4">
               <h3 className="text-base font-bold text-slate-800 truncate">{safeStr(selectedPlace.name)}</h3>
               <p className="text-[11px] text-slate-500 truncate flex items-center gap-1 mt-1">
-                <MapPin size={12} className="shrink-0" /> {safeStr(selectedPlace.district)} {safeStr(selectedPlace.address)}
+                <MapPin size={12} className="shrink-0" /> {normalizeAddressText(selectedPlace)}
               </p>
             </div>
             
