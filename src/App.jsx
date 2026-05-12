@@ -225,6 +225,13 @@ const normalizeSearchCandidate = (item, fallbackCity = '') => {
   };
 };
 
+const extractPoiAddress = (poi) => ({
+  district: `${safeStr(poi?.pname)}${safeStr(poi?.cityname)}${safeStr(poi?.adname)}`,
+  address: safeStr(poi?.address),
+  city: safeStr(poi?.cityname),
+  location: poi?.location ? normalizePlaceLocation({ lng: poi.location.lng, lat: poi.location.lat }) : null,
+});
+
 const placeIdentityKey = (placeData, fallbackCity = '') => {
   const city = inferCityName(placeData, fallbackCity);
   const name = safeStr(placeData?.name).replace(/\s+/g, '').toLowerCase();
@@ -1245,6 +1252,8 @@ export default function App() {
           ...optimisticPlace,
           address: safeStr(resolvedAddress.address) || optimisticPlace.address,
           district: safeStr(resolvedAddress.district) || optimisticPlace.district,
+          location: normalizePlaceLocation(resolvedAddress.location) || optimisticPlace.location,
+          city: safeStr(resolvedAddress.city) || optimisticPlace.city,
         }, currentCity, optimisticPlace);
         upsertSavedPlaceLocally(hydratedPlace, dedupeKey);
         if (user && !user.is_anonymous && supabase) {
@@ -1328,7 +1337,8 @@ export default function App() {
 
 
   const resolveAddressForPlace = async (placeData) => {
-    const location = getLngLat(placeData?.location);
+    const normalizedInput = normalizeSearchCandidate(placeData, currentCity) || placeData;
+    const location = getLngLat(normalizedInput?.location);
     const direct = safeMergeAddress(placeData?.district, placeData?.address);
     if (direct && !isPlaceholderAddress(direct)) {
       return {
@@ -1336,8 +1346,50 @@ export default function App() {
         district: safeStr(placeData?.district),
       };
     }
-    if (!window.AMap || !location) {
-      return { address: normalizeAddressText(placeData), district: safeStr(placeData?.district) };
+    if (!window.AMap) {
+      return { address: normalizeAddressText(normalizedInput), district: safeStr(normalizedInput?.district) };
+    }
+
+    // For lightweight search suggestions, fetch the full POI detail first.
+    if (window.AMap.PlaceSearch) {
+      try {
+        const resolvedByKeyword = await new Promise((resolve) => {
+          const ps = new window.AMap.PlaceSearch({
+            city: currentCity === '全国' ? '全国' : currentCity,
+            citylimit: false,
+            pageSize: 10,
+            extensions: 'all',
+          });
+          ps.search(safeStr(normalizedInput?.name) || '地点', (status, result) => {
+            if (status !== 'complete' || !result?.poiList?.pois?.length) {
+              resolve(null);
+              return;
+            }
+
+            const pois = result.poiList.pois;
+            const matchedPoi = pois.find((poi) => safeStr(poi.id) && safeStr(poi.id) === safeStr(normalizedInput?.id))
+              || pois.find((poi) => safeStr(poi.name) === safeStr(normalizedInput?.name))
+              || pois[0];
+
+            resolve(matchedPoi ? extractPoiAddress(matchedPoi) : null);
+          });
+        });
+
+        if (resolvedByKeyword && !isPlaceholderAddress(safeMergeAddress(resolvedByKeyword.district, resolvedByKeyword.address))) {
+          return {
+            district: resolvedByKeyword.district,
+            address: stripDistrictPrefix(resolvedByKeyword.address, resolvedByKeyword.district),
+            location: resolvedByKeyword.location || normalizePlaceLocation(normalizedInput?.location),
+            city: resolvedByKeyword.city || safeStr(normalizedInput?.city),
+          };
+        }
+      } catch (error) {
+        console.warn('PlaceSearch detail lookup failed', error);
+      }
+    }
+
+    if (!location) {
+      return { address: normalizeAddressText(normalizedInput), district: safeStr(normalizedInput?.district) };
     }
 
     // Try PlaceSearch around the clicked coordinate first.
@@ -1356,16 +1408,15 @@ export default function App() {
               return;
             }
             const poi = result.poiList.pois[0];
-            resolve({
-              district: `${safeStr(poi.pname)}${safeStr(poi.cityname)}${safeStr(poi.adname)}`,
-              address: safeStr(poi.address),
-            });
+            resolve(extractPoiAddress(poi));
           });
         });
         if (resolved) {
           return {
             district: resolved.district,
             address: stripDistrictPrefix(resolved.address, resolved.district),
+            location: resolved.location || normalizePlaceLocation(normalizedInput?.location),
+            city: resolved.city || safeStr(normalizedInput?.city),
           };
         }
       } catch (error) {
@@ -1388,6 +1439,7 @@ export default function App() {
             resolve({
               district,
               address: safeStr(result.regeocode.formattedAddress),
+              city: safeStr(comp.city),
             });
           });
         });
@@ -1395,6 +1447,7 @@ export default function App() {
           return {
             district: resolved.district,
             address: stripDistrictPrefix(resolved.address, resolved.district),
+            city: resolved.city || safeStr(normalizedInput?.city),
           };
         }
       } catch (error) {
@@ -1402,7 +1455,7 @@ export default function App() {
       }
     }
 
-    return { address: normalizeAddressText(placeData), district: safeStr(placeData?.district) };
+    return { address: normalizeAddressText(normalizedInput), district: safeStr(normalizedInput?.district), city: safeStr(normalizedInput?.city) };
   };
 
   const createSavedPlaceFromSource = async (placeData) => {
@@ -1414,11 +1467,11 @@ export default function App() {
     const newPlace = normalizeSavedPlaceRecord({
       id: existingByKey?.id || placeData?.id || Date.now().toString(),
       name: placeName,
-      location: normalizePlaceLocation(placeData?.location),
+      location: normalizePlaceLocation(resolvedAddress.location) || normalizePlaceLocation(placeData?.location),
       category: safeStr(placeData?.category) || '景点',
       address: safeStr(resolvedAddress.address) || stripDistrictPrefix(placeData?.address, placeData?.district),
       district: safeStr(resolvedAddress.district) || safeStr(placeData?.district) || safeStr(existingByKey?.district) || '',
-      city: inferredCity,
+      city: safeStr(resolvedAddress.city) || inferredCity,
       savedAt: existingByKey?.savedAt || Date.now(),
     }, currentCity, existingByKey);
     upsertSavedPlaceLocally(newPlace, dedupeKey);
