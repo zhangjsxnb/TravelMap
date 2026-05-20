@@ -739,6 +739,7 @@ export default function App() {
   const [segmentModes, setSegmentModes] = useState([]); 
   const [segmentRoutes, setSegmentRoutes] = useState([]); 
   const [, setIsCalculatingSegments] = useState(false);
+  const [openStayPickerId, setOpenStayPickerId] = useState(null);
   const [stayMinutesByPlace, setStayMinutesByPlace] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('travel_stay_minutes') || '{}');
@@ -1185,6 +1186,13 @@ export default function App() {
          
          const currentMode = segmentModes[i] || 'driving';
 
+         const segmentCacheKey = `${p1.id}_${p2.id}_${currentMode}_${currentCity}`;
+         const segmentCached = routeCacheRef.current.get(segmentCacheKey);
+         if (segmentCached) {
+           results.push(segmentCached);
+           continue;
+         }
+
          if (!start || !end) {
            results.push({ distance: 0, time: 0 });
            continue;
@@ -1236,6 +1244,7 @@ export default function App() {
            }
          });
          results.push(res);
+         routeCacheRef.current.set(segmentCacheKey, res);
       }
       if (!canceled) {
         setSegmentRoutes(results);
@@ -1248,7 +1257,6 @@ export default function App() {
   }, [activeTrip, currentRouteDay, savedPlacesById, segmentModes, currentCity, mapStatus, showRoutePanel]);
 
   const handleSegmentModeChange = (index, newMode) => {
-    routeCacheRef.current.clear();
     setSegmentModes(prev => {
       const next = [...prev];
       next[index] = newMode;
@@ -2725,11 +2733,28 @@ export default function App() {
                       ) : null}
                       {currentDayRows.map((row) => {
                         const rowIndex = timelineRows.findIndex((item) => item.id === row.id);
-                        const segMode = segmentModes[Math.max(0, rowIndex - 1)] || 'driving';
-                        const transitMinute = row.transitMinute || 0;
-                        const modeLabel = segMode === 'transit' ? '公交' : segMode === 'riding' ? '骑行' : segMode === 'walking' ? '步行' : '驾车';
                         const currentStayMinute = Math.max(15, Number(stayMinutesByPlace[row.place.id]) || row.stayMinutes);
                         return (
+                          <>
+                          {rowIndex > 0 && (
+                            <div className="flex flex-col items-center justify-center h-16 relative z-10 -my-2">
+                              <div className="absolute top-0 bottom-0 w-[2px] bg-slate-200 left-[34px] sm:left-1/2 sm:-translate-x-1/2"></div>
+                              <div className="relative z-10 flex items-center gap-2 text-[11px] px-3 py-1.5 rounded-full bg-white border border-slate-200 text-slate-600 shadow-sm font-medium ml-[68px] sm:ml-0">
+                                <select
+                                  value={segmentModes[rowIndex - 1] || 'driving'}
+                                  onChange={(e) => handleSegmentModeChange(rowIndex - 1, e.target.value)}
+                                  className="bg-transparent outline-none font-bold text-blue-500 cursor-pointer"
+                                >
+                                  <option value="driving">🚗 驾车</option>
+                                  <option value="transit">🚌 公交</option>
+                                  <option value="riding">🚲 骑行</option>
+                                  <option value="walking">🚶 步行</option>
+                                </select>
+                                <span className="w-[1px] h-3 bg-slate-200"></span>
+                                <span>{segmentRoutes[rowIndex - 1]?.time ? Math.round(segmentRoutes[rowIndex - 1].time / 60) : 0} 分</span>
+                              </div>
+                            </div>
+                          )}
                           <div key={`timeline_${row.id}`} className="group bg-white rounded-[24px] p-4 border border-slate-100 shadow-sm transition-all relative">
                             <div className="flex justify-between items-start gap-3">
                               <div className="flex gap-3 min-w-0">
@@ -2751,34 +2776,34 @@ export default function App() {
                                   </div>
                                   <div className="text-[10px] leading-4 text-slate-400 break-words">{normalizeAddressText(row.place)}</div>
                                   <div className="flex items-center flex-wrap gap-1.5 text-slate-400 mt-1">
-                                    <div className="flex items-center gap-1 rounded-full bg-slate-50 border border-slate-100 px-2 py-1">
-                                      <Clock size={14} />
-                                      <span className="text-[10px]">停留</span>
-                                      <select
-                                        value={currentStayMinute}
-                                        onChange={(event) => updateStayMinutes(row.place.id, Math.max(15, Number(event.target.value) || 15))}
-                                        className="bg-transparent text-[10px] font-bold text-slate-700 outline-none appearance-none cursor-pointer pr-3"
+                                    <div className="relative">
+                                      <button
+                                        type="button"
+                                        onClick={() => setOpenStayPickerId(openStayPickerId === row.id ? null : row.id)}
+                                        className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 transition-colors ${openStayPickerId === row.id ? 'bg-blue-50 border-blue-200 text-blue-600' : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100'}`}
                                       >
-                                        {getStayDurationOptions(currentStayMinute).map((minute) => (
-                                          <option key={`stay_${row.place.id}_${minute}`} value={minute}>
-                                            {formatDurationCn(minute)}
-                                          </option>
-                                        ))}
-                                      </select>
+                                        <Clock size={13} />
+                                        <span className="text-[10px] font-bold">停留 {formatDurationCn(currentStayMinute)}</span>
+                                      </button>
+                                      {openStayPickerId === row.id && (
+                                        <>
+                                          <div className="fixed inset-0 z-40" onClick={() => setOpenStayPickerId(null)}></div>
+                                          <div className="absolute top-full left-0 mt-2 z-50 w-24 bg-white border border-slate-100 rounded-2xl shadow-xl py-1.5 max-h-48 overflow-y-auto">
+                                            {getStayDurationOptions(currentStayMinute).map((minute) => (
+                                              <div key={minute} onClick={() => { updateStayMinutes(row.place.id, minute); setOpenStayPickerId(null); }} className="px-3 py-2 text-xs text-center hover:bg-blue-50 cursor-pointer">
+                                                {formatDurationCn(minute)}
+                                              </div>
+                                            ))}
+                                          </div>
+                                        </>
+                                      )}
                                     </div>
-                                    {rowIndex > 0 ? <div className="text-[10px] px-2 py-1 rounded-full bg-slate-50 border border-slate-100 text-slate-500">{modeLabel} · {formatDurationCn(transitMinute)}</div> : null}
                                   </div>
                                 </div>
                               </div>
                               <div className="w-24 shrink-0">
-                                <select value={currentDayPlaceIds.includes(row.place.id) ? currentRouteDay : Math.max(1, Math.min(totalDays, Number(stayMinutesByPlace[`day_${row.place.id}`] || currentRouteDay)))} onChange={(event) => movePlaceToTripDay(row.place.id, Math.max(1, Math.min(totalDays, Number(event.target.value) || 1)))} className="mb-2 w-full px-2 py-1 rounded-xl border border-slate-200 text-xs font-bold bg-white">
+                                <select value={currentDayPlaceIds.includes(row.place.id) ? currentRouteDay : Math.max(1, Math.min(totalDays, Number(stayMinutesByPlace[`day_${row.place.id}`] || currentRouteDay)))} onChange={(event) => movePlaceToTripDay(row.place.id, Math.max(1, Math.min(totalDays, Number(event.target.value) || 1)))} className="w-full px-2 py-1 rounded-xl border border-slate-200 text-xs font-bold bg-white">
                                   {dayOptions.map((d) => <option key={`d_${row.id}_${d}`} value={d}>D{d}</option>)}
-                                </select>
-                                <select value={segMode} onChange={(event) => { if (rowIndex > 0) handleSegmentModeChange(rowIndex - 1, event.target.value); }} className="w-full px-2 py-1 rounded-xl border border-slate-200 text-xs font-bold bg-white">
-                                  <option value="driving">驾车</option>
-                                  <option value="transit">公交</option>
-                                  <option value="riding">骑行</option>
-                                  <option value="walking">步行</option>
                                 </select>
                               </div>
                             </div>
@@ -2796,6 +2821,7 @@ export default function App() {
                               <div className="flex flex-col text-right"><span className="text-[9px] text-slate-400 font-black uppercase">Leave</span><span className="text-sm font-black text-slate-700">{row.leaveAt}</span></div>
                             </div>
                           </div>
+                          </>
                         );
                       })}
                     </div>
