@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useMemo, useRef, memo } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback, memo } from 'react';
 import { 
   Map as MapIcon, List, User, Search, MapPin, Plus, Heart, 
   Navigation, CheckCircle2, Circle, Clock,
@@ -302,10 +302,36 @@ const getSuggestedViewport = (places = []) => {
   };
 };
 
-const getStayDurationOptions = (currentMinute) => {
-  const values = new Set([Math.max(15, Math.round(Number(currentMinute) || 0))]);
-  for (let minute = 15; minute <= 720; minute += 15) values.add(minute);
-  return Array.from(values).sort((a, b) => a - b);
+const STAY_PICKER_HOURS = Array.from({ length: 13 }, (_, index) => index);
+const STAY_PICKER_MINUTES = [0, 15, 30, 45];
+
+const normalizeStayMinute = (value) => (
+  Math.max(15, Math.min(24 * 60, Math.round(Number(value) || 0)))
+);
+
+const toStayPickerValue = (totalMinute) => {
+  const normalized = normalizeStayMinute(totalMinute);
+  const hour = Math.floor(normalized / 60);
+  const minute = normalized % 60;
+  return {
+    hour,
+    minute: STAY_PICKER_MINUTES.includes(minute) ? minute : 0,
+  };
+};
+
+const buildSegmentCacheKey = ({ start, end, mode, city }) => {
+  const startText = Array.isArray(start) ? `${start[0]},${start[1]}` : 'no_start';
+  const endText = Array.isArray(end) ? `${end[0]},${end[1]}` : 'no_end';
+  return `${startText}__${endText}__${mode}__${safeStr(city)}`;
+};
+
+const inferRouteCity = (startPlace, endPlace, fallbackCity) => {
+  const startCity = inferCityName(startPlace, fallbackCity);
+  const endCity = inferCityName(endPlace, fallbackCity);
+  if (startCity && endCity && startCity === endCity) return startCity;
+  if (startCity) return startCity;
+  if (endCity) return endCity;
+  return fallbackCity === '全国' ? '北京' : fallbackCity;
 };
 
 const flattenTripPlaceIds = (trip) => {
@@ -642,6 +668,78 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
     </div>
   );
 };
+
+const StayDurationPicker = ({ open, initialMinute, onClose, onConfirm }) => {
+  const initialValue = useMemo(() => toStayPickerValue(initialMinute), [initialMinute]);
+  const [hour, setHour] = useState(initialValue.hour);
+  const [minute, setMinute] = useState(initialValue.minute);
+
+  useEffect(() => {
+    if (!open) return;
+    setHour(initialValue.hour);
+    setMinute(initialValue.minute);
+  }, [initialValue, open]);
+
+  if (!open) return null;
+
+  const confirmValue = () => {
+    onConfirm(normalizeStayMinute(hour * 60 + minute));
+  };
+
+  return (
+    <div className="fixed inset-0 z-[170] flex items-center justify-center bg-black/35 backdrop-blur-sm p-4" onClick={onClose}>
+      <div className="w-full max-w-[260px] rounded-[28px] bg-white shadow-2xl overflow-hidden" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 pt-5 pb-3 border-b border-slate-100">
+          <div>
+            <h3 className="text-base font-black text-slate-800">选择停留时间</h3>
+            <p className="text-[11px] text-slate-400 mt-1">{formatDurationCn(hour * 60 + minute)}</p>
+          </div>
+          <button type="button" onClick={onClose} className="w-8 h-8 rounded-full bg-slate-50 text-slate-500 flex items-center justify-center hover:bg-slate-100 transition-colors">
+            <X size={16} />
+          </button>
+        </div>
+        <div className="grid grid-cols-2 relative">
+          <div className="absolute left-3 right-3 top-1/2 -translate-y-1/2 h-14 rounded-2xl border-2 border-slate-900 pointer-events-none" />
+          <div className="h-72 overflow-y-auto py-[108px] snap-y snap-mandatory">
+            {STAY_PICKER_HOURS.map((value) => {
+              const selected = value === hour;
+              return (
+                <button
+                  key={`stay_hour_${value}`}
+                  type="button"
+                  onClick={() => setHour(value)}
+                  className={`h-14 w-full snap-center text-3xl font-black transition-colors ${selected ? 'bg-blue-600 text-white' : 'text-slate-900 hover:bg-slate-50'}`}
+                >
+                  {String(value).padStart(2, '0')}
+                </button>
+              );
+            })}
+          </div>
+          <div className="h-72 overflow-y-auto py-[108px] border-l border-slate-200 snap-y snap-mandatory">
+            {STAY_PICKER_MINUTES.map((value) => {
+              const selected = value === minute;
+              return (
+                <button
+                  key={`stay_minute_${value}`}
+                  type="button"
+                  onClick={() => setMinute(value)}
+                  className={`h-14 w-full snap-center text-3xl font-black transition-colors ${selected ? 'bg-blue-600 text-white' : 'text-slate-900 hover:bg-slate-50'}`}
+                >
+                  {String(value).padStart(2, '0')}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div className="flex gap-3 px-5 py-4 border-t border-slate-100">
+          <button type="button" onClick={onClose} className="flex-1 h-11 rounded-2xl bg-slate-100 text-slate-600 font-bold">取消</button>
+          <button type="button" onClick={confirmValue} className="flex-1 h-11 rounded-2xl bg-blue-600 text-white font-bold">确定</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const RealMap = memo(RealMapBase);
 
 // ==========================================
@@ -747,11 +845,12 @@ export default function App() {
   const [newTripDayCount, setNewTripDayCount] = useState(1);
   const [newTripSelectedPlaceIds, setNewTripSelectedPlaceIds] = useState([]);
   const [newTripPlaceDayMap, setNewTripPlaceDayMap] = useState({});
+  const [stayPickerState, setStayPickerState] = useState({ open: false, placeId: '', minute: 90 });
   
   // 分段交通方式配置
   const [segmentModes, setSegmentModes] = useState([]); 
   const [segmentRoutes, setSegmentRoutes] = useState([]); 
-  const [, setIsCalculatingSegments] = useState(false);
+  const [isCalculatingSegments, setIsCalculatingSegments] = useState(false);
   const [stayMinutesByPlace, setStayMinutesByPlace] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('travel_stay_minutes') || '{}');
@@ -800,6 +899,7 @@ export default function App() {
 
   const autoComplete = useRef(null);
   const routeCacheRef = useRef(new Map());
+  const segmentRequestSeqRef = useRef(0);
   const searchRequestRef = useRef(0);
   const itinerarySearchRequestRef = useRef(0);
   const favoriteActionTokenRef = useRef(0);
@@ -1166,102 +1266,116 @@ export default function App() {
     setIsSearchingItinerary(false);
   }, [activeTripId, currentRouteDay, showRoutePanel]);
 
+  const fetchSegmentRoute = useCallback(async ({ startPlace, endPlace, mode }) => {
+    const start = getLngLat(startPlace?.location);
+    const end = getLngLat(endPlace?.location);
+    const routeCity = inferRouteCity(startPlace, endPlace, currentCity);
+    const cacheKey = buildSegmentCacheKey({ start, end, mode, city: routeCity });
+
+    if (!start || !end) {
+      return { distance: 0, time: 0, path: start && end ? [start, end] : [], mode, pending: false };
+    }
+
+    const cached = routeCacheRef.current.get(cacheKey);
+    if (cached) return cached;
+
+    const result = await new Promise((resolve) => {
+      let searcher;
+      const finish = (payload) => {
+        try {
+          searcher?.clear?.();
+        } catch {
+          void 0;
+        }
+        resolve({ ...payload, mode, pending: false });
+      };
+
+      try {
+        if (mode === 'walking' && window.AMap.Walking) searcher = new window.AMap.Walking();
+        else if (mode === 'riding' && window.AMap.Riding) searcher = new window.AMap.Riding();
+        else if (mode === 'transit' && window.AMap.Transfer) searcher = new window.AMap.Transfer({ city: routeCity });
+        else if (window.AMap.Driving) searcher = new window.AMap.Driving();
+
+        if (!searcher?.search) {
+          finish({ distance: 0, time: 0, path: [start, end] });
+          return;
+        }
+
+        searcher.search(start, end, (status, searchResult) => {
+          try {
+            if (status === 'complete') {
+              let distance = 0;
+              let time = 0;
+              let path = [];
+              if (mode === 'transit' && searchResult?.plans?.length > 0) {
+                distance = searchResult.plans[0].distance;
+                time = searchResult.plans[0].time;
+                path = (searchResult.plans[0].segments || []).flatMap((seg) => [
+                  ...(seg.walking?.steps || []).flatMap((step) => step.path || []),
+                  ...(seg.transit?.lines || []).flatMap((line) => line.path || []),
+                ]);
+              } else if (searchResult?.routes?.length > 0) {
+                distance = searchResult.routes[0].distance;
+                time = searchResult.routes[0].time;
+                path = (searchResult.routes[0].steps || []).flatMap((step) => step.path || []);
+              }
+              finish({ distance, time, path: path.length >= 2 ? path : [start, end] });
+              return;
+            }
+
+            const dist = window.AMap?.GeometryUtil?.distance?.(start, end) || 0;
+            const speed = mode === 'walking' ? 1.2 : mode === 'riding' ? 4 : 10;
+            finish({ distance: dist, time: dist / speed, path: [start, end] });
+          } catch {
+            finish({ distance: 0, time: 0, path: [start, end] });
+          }
+        });
+      } catch {
+        finish({ distance: 0, time: 0, path: [start, end] });
+      }
+    });
+
+    routeCacheRef.current.set(cacheKey, result);
+    return result;
+  }, [currentCity]);
+
   // 获取分段路线详情（独立计算每一段的出行方式）
   useEffect(() => {
-    const dayPlaces = activeTrip?.days?.[Math.max(0, currentRouteDay - 1)]?.places || [];
-    const currentDayTripPlaces = dayPlaces
-      .map((pid) => savedPlacesById.get(safeStr(pid)))
-      .filter(Boolean);
-    const currentDayTripPlaceIds = currentDayTripPlaces.map((place) => place.id).join(',');
     if (!window.AMap || currentDayTripPlaces.length < 2 || !showRoutePanel) {
       setSegmentRoutes([]);
+      setIsCalculatingSegments(false);
       return;
     }
     
-    let canceled = false;
+    const requestSeq = ++segmentRequestSeqRef.current;
+    const segmentCount = Math.max(0, currentDayTripPlaces.length - 1);
+    setSegmentRoutes((prev) => Array.from({ length: segmentCount }, (_, index) => prev[index] || { distance: 0, time: 0, path: [], pending: true }));
     setIsCalculatingSegments(true);
 
     const fetchSegments = async () => {
-      const cacheKey = `${currentDayTripPlaceIds}__${JSON.stringify(segmentModes)}__${currentCity}`;
-      const cached = routeCacheRef.current.get(cacheKey);
-      if (cached) {
-        setSegmentRoutes(cached);
-        setIsCalculatingSegments(false);
-        return;
-      }
-      const results = [];
-      for (let i = 0; i < currentDayTripPlaces.length - 1; i++) {
-         const p1 = currentDayTripPlaces[i];
-         const p2 = currentDayTripPlaces[i+1];
-         const start = getLngLat(p1.location);
-         const end = getLngLat(p2.location);
-         
-         const currentMode = segmentModes[i] || 'driving';
+      const results = await Promise.all(
+        currentDayTripPlaces.slice(0, -1).map((place, index) => fetchSegmentRoute({
+          startPlace: place,
+          endPlace: currentDayTripPlaces[index + 1],
+          mode: segmentModes[index] || 'driving',
+        }))
+      );
 
-         if (!start || !end) {
-           results.push({ distance: 0, time: 0 });
-           continue;
-         }
-
-         const res = await new Promise((resolve) => {
-           let searcher;
-           try {
-             if (currentMode === 'walking' && window.AMap.Walking) searcher = new window.AMap.Walking();
-             else if (currentMode === 'riding' && window.AMap.Riding) searcher = new window.AMap.Riding();
-             else if (currentMode === 'transit' && window.AMap.Transfer) {
-               const safeCity = currentCity === '全国' ? '北京' : currentCity;
-               searcher = new window.AMap.Transfer({ city: safeCity });
-             }
-             else if (window.AMap.Driving) searcher = new window.AMap.Driving();
-  
-             if (searcher) {
-               searcher.search(start, end, (status, result) => {
-                 try {
-                    if (status === 'complete') {
-                       let distance = 0, time = 0, path = [];
-                       if (currentMode === 'transit' && result.plans && result.plans.length > 0) {
-                          distance = result.plans[0].distance;
-                          time = result.plans[0].time;
-                          path = (result.plans[0].segments || []).flatMap((seg) => [
-                            ...(seg.walking?.steps || []).flatMap((step) => step.path || []),
-                            ...(seg.transit?.lines || []).flatMap((line) => line.path || []),
-                          ]);
-                       } else if (result.routes && result.routes.length > 0) {
-                          distance = result.routes[0].distance;
-                          time = result.routes[0].time;
-                          path = (result.routes[0].steps || []).flatMap((step) => step.path || []);
-                       }
-                       resolve({ distance, time, path: path.length >= 2 ? path : [start, end] });
-                    } else {
-                       const dist = window.AMap.GeometryUtil.distance(start, end);
-                       const speed = currentMode === 'walking' ? 1.2 : currentMode === 'riding' ? 4 : 10;
-                       resolve({ distance: dist, time: dist / speed, path: [start, end] });
-                    }
-                  } catch {
-                    resolve({ distance: 0, time: 0, path: [start, end] });
-                  }
-               });
-             } else {
-               resolve({ distance: 0, time: 0, path: [start, end] });
-             }
-           } catch {
-             resolve({ distance: 0, time: 0, path: [start, end] });
-           }
-         });
-         results.push(res);
-      }
-      if (!canceled) {
+      if (segmentRequestSeqRef.current === requestSeq) {
         setSegmentRoutes(results);
-        routeCacheRef.current.set(cacheKey, results);
         setIsCalculatingSegments(false);
       }
     };
-    fetchSegments();
-    return () => { canceled = true; };
-  }, [activeTrip, currentRouteDay, savedPlacesById, segmentModes, currentCity, mapStatus, showRoutePanel]);
+
+    fetchSegments().catch(() => {
+      if (segmentRequestSeqRef.current === requestSeq) {
+        setSegmentRoutes(Array.from({ length: segmentCount }, () => ({ distance: 0, time: 0, path: [], pending: false })));
+        setIsCalculatingSegments(false);
+      }
+    });
+  }, [currentDayTripPlaces, fetchSegmentRoute, segmentModes, mapStatus, showRoutePanel]);
 
   const handleSegmentModeChange = (index, newMode) => {
-    routeCacheRef.current.clear();
     setSegmentModes(prev => {
       const next = [...prev];
       next[index] = newMode;
@@ -1277,7 +1391,7 @@ export default function App() {
   void setAllSegmentModes;
 
   const updateStayMinutes = (placeId, nextMinute) => {
-    const normalizedMinute = Math.max(15, Math.min(24 * 60, Math.round(Number(nextMinute) || 0)));
+    const normalizedMinute = normalizeStayMinute(nextMinute);
     setStayMinutesByPlace((prev) => ({
       ...prev,
       [placeId]: normalizedMinute,
@@ -2753,7 +2867,10 @@ export default function App() {
                       ) : null}
                       {currentDayRows.map((row) => {
                         const rowIndex = timelineRows.findIndex((item) => item.id === row.id);
-                        const segMode = segmentModes[Math.max(0, rowIndex - 1)] || 'driving';
+                        const segmentIndex = rowIndex - 1;
+                        const hasIncomingSegment = segmentIndex >= 0;
+                        const segMode = hasIncomingSegment ? (segmentModes[segmentIndex] || 'driving') : 'driving';
+                        const segmentInfo = hasIncomingSegment ? segmentRoutes[segmentIndex] : null;
                         const transitMinute = row.transitMinute || 0;
                         const modeLabel = segMode === 'transit' ? '公交' : segMode === 'riding' ? '骑行' : segMode === 'walking' ? '步行' : '驾车';
                         const currentStayMinute = Math.max(15, Number(stayMinutesByPlace[row.place.id]) || row.stayMinutes);
@@ -2779,22 +2896,21 @@ export default function App() {
                                   </div>
                                   <div className="text-[10px] leading-4 text-slate-400 break-words">{normalizeAddressText(row.place)}</div>
                                   <div className="flex items-center flex-wrap gap-1.5 text-slate-400 mt-1">
-                                    <div className="flex items-center gap-1 rounded-full bg-slate-50 border border-slate-100 px-2 py-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => setStayPickerState({ open: true, placeId: row.place.id, minute: currentStayMinute })}
+                                      className="flex items-center gap-1 rounded-full bg-slate-50 border border-slate-100 px-2 py-1 hover:bg-slate-100 transition-colors"
+                                    >
                                       <Clock size={14} />
                                       <span className="text-[10px]">停留</span>
-                                      <select
-                                        value={currentStayMinute}
-                                        onChange={(event) => updateStayMinutes(row.place.id, Math.max(15, Number(event.target.value) || 15))}
-                                        className="bg-transparent text-[10px] font-bold text-slate-700 outline-none appearance-none cursor-pointer pr-3"
-                                      >
-                                        {getStayDurationOptions(currentStayMinute).map((minute) => (
-                                          <option key={`stay_${row.place.id}_${minute}`} value={minute}>
-                                            {formatDurationCn(minute)}
-                                          </option>
-                                        ))}
-                                      </select>
-                                    </div>
-                                    {rowIndex > 0 ? <div className="text-[10px] px-2 py-1 rounded-full bg-slate-50 border border-slate-100 text-slate-500">{modeLabel} · {formatDurationCn(transitMinute)}</div> : null}
+                                      <span className="text-[10px] font-bold text-slate-700">{formatDurationCn(currentStayMinute)}</span>
+                                      <ChevronDown size={12} />
+                                    </button>
+                                    {hasIncomingSegment ? (
+                                      <div className="text-[10px] px-2 py-1 rounded-full bg-slate-50 border border-slate-100 text-slate-500">
+                                        {modeLabel} · {segmentInfo?.pending ? '计算中...' : formatDurationCn(transitMinute)}
+                                      </div>
+                                    ) : null}
                                   </div>
                                 </div>
                               </div>
@@ -2802,12 +2918,16 @@ export default function App() {
                                 <select value={currentDayPlaceIds.includes(row.place.id) ? currentRouteDay : Math.max(1, Math.min(totalDays, Number(stayMinutesByPlace[`day_${row.place.id}`] || currentRouteDay)))} onChange={(event) => movePlaceToTripDay(row.place.id, Math.max(1, Math.min(totalDays, Number(event.target.value) || 1)))} className="mb-2 w-full px-2 py-1 rounded-xl border border-slate-200 text-xs font-bold bg-white">
                                   {dayOptions.map((d) => <option key={`d_${row.id}_${d}`} value={d}>D{d}</option>)}
                                 </select>
-                                <select value={segMode} onChange={(event) => { if (rowIndex > 0) handleSegmentModeChange(rowIndex - 1, event.target.value); }} className="w-full px-2 py-1 rounded-xl border border-slate-200 text-xs font-bold bg-white">
-                                  <option value="driving">驾车</option>
-                                  <option value="transit">公交</option>
-                                  <option value="riding">骑行</option>
-                                  <option value="walking">步行</option>
-                                </select>
+                                {hasIncomingSegment ? (
+                                  <select value={segMode} onChange={(event) => handleSegmentModeChange(segmentIndex, event.target.value)} className="w-full px-2 py-1 rounded-xl border border-slate-200 text-xs font-bold bg-white">
+                                    <option value="driving">驾车</option>
+                                    <option value="transit">公交</option>
+                                    <option value="riding">骑行</option>
+                                    <option value="walking">步行</option>
+                                  </select>
+                                ) : (
+                                  <div className="w-full px-2 py-1 rounded-xl border border-slate-100 bg-slate-50 text-[11px] font-semibold text-slate-400 text-center">当天首站</div>
+                                )}
                               </div>
                             </div>
                             <div className="flex items-center justify-between mt-5 pt-4 border-t border-dashed border-slate-100 gap-3">
@@ -2840,6 +2960,16 @@ export default function App() {
               </div>
             </div>
           </div>
+
+        <StayDurationPicker
+          open={stayPickerState.open}
+          initialMinute={stayPickerState.minute}
+          onClose={() => setStayPickerState((prev) => ({ ...prev, open: false }))}
+          onConfirm={(minute) => {
+            updateStayMinutes(stayPickerState.placeId, minute);
+            setStayPickerState({ open: false, placeId: '', minute });
+          }}
+        />
 
         {showMemoTemplateModal && (
           <div className="fixed inset-0 z-[160] flex items-center justify-center bg-black/40 backdrop-blur-sm p-6 animate-in fade-in">
