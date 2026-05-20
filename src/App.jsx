@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback, memo } from 'react';
+﻿import { useState, useEffect, useMemo, useRef, useCallback, memo } from 'react';
 import { 
   Map as MapIcon, List, User, Search, MapPin, Plus, Heart, 
   Navigation, CheckCircle2, Circle, Clock,
@@ -1266,14 +1266,6 @@ export default function App() {
     setIsSearchingItinerary(false);
   }, [activeTripId, currentRouteDay, showRoutePanel]);
 
-  const dayStorageKey = `${safeStr(activeTripId) || 'default'}::day_${currentRouteDay}`;
-  const currentDayPlaceIds = useMemo(() => activeTrip?.days?.[currentRouteDay - 1]?.places || [], [activeTrip, currentRouteDay]);
-  const currentDayTripPlaces = useMemo(() => (
-    currentDayPlaceIds
-      .map((pid) => savedPlacesById.get(safeStr(pid)))
-      .filter(Boolean)
-  ), [currentDayPlaceIds, savedPlacesById]);
-
   const fetchSegmentRoute = useCallback(async ({ startPlace, endPlace, mode }) => {
     const start = getLngLat(startPlace?.location);
     const end = getLngLat(endPlace?.location);
@@ -2103,6 +2095,13 @@ export default function App() {
   const totalTime = segmentRoutes.reduce((acc, curr) => acc + (curr?.time || 0), 0);
   void totalDist;
   void totalTime;
+  const dayStorageKey = `${safeStr(activeTripId) || 'default'}::day_${currentRouteDay}`;
+  const currentDayPlaceIds = useMemo(() => activeTrip?.days?.[currentRouteDay - 1]?.places || [], [activeTrip, currentRouteDay]);
+  const currentDayTripPlaces = useMemo(() => (
+    currentDayPlaceIds
+      .map((pid) => savedPlacesById.get(safeStr(pid)))
+      .filter(Boolean)
+  ), [currentDayPlaceIds, savedPlacesById]);
 
   useEffect(() => {
     if (!showRoutePanel || !activeTripId) {
