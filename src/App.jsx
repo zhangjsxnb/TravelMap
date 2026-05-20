@@ -98,14 +98,6 @@ const formatDurationCn = (totalMinute) => {
   return `${hour}小时${minute}分`;
 };
 
-const splitDurationMinute = (totalMinute) => {
-  const safeMinute = Math.max(15, Math.round(Number(totalMinute) || 0));
-  return {
-    hour: Math.floor(safeMinute / 60),
-    minute: safeMinute % 60,
-  };
-};
-
 const estimateStayMinutes = (place) => {
   const name = safeStr(place?.name);
   const category = safeStr(place?.category);
@@ -193,6 +185,30 @@ const normalizeAddressText = (placeData) => {
 
 const isPlaceholderAddress = (value) => /^(地图标记地点|地址待补全)$/.test(safeStr(value).trim());
 
+const isPlaceholderPlaceName = (value) => /^(地图选点|地图标记地点|未知地点)$/.test(safeStr(value).trim());
+
+const derivePlaceName = (placeData = {}, existingPlace = null) => {
+  const candidates = [
+    placeData?.name,
+    existingPlace?.name,
+    placeData?.address,
+    existingPlace?.address,
+    placeData?.district,
+    existingPlace?.district,
+  ];
+
+  for (const candidate of candidates) {
+    const text = safeStr(candidate).trim();
+    if (!text) continue;
+    if (!isPlaceholderPlaceName(text) && !isPlaceholderAddress(text)) return text;
+  }
+
+  const mergedAddress = safeMergeAddress(placeData?.district || existingPlace?.district, placeData?.address || existingPlace?.address);
+  if (mergedAddress && !isPlaceholderAddress(mergedAddress)) return mergedAddress;
+
+  return '未知地点';
+};
+
 const normalizeSavedPlaceRecord = (placeData, fallbackCity = '', existingPlace = null) => {
   const nextDistrict = safeStr(placeData?.district || existingPlace?.district).trim();
   const rawAddress = stripDistrictPrefix(
@@ -206,7 +222,7 @@ const normalizeSavedPlaceRecord = (placeData, fallbackCity = '', existingPlace =
 
   return {
     id: safeStr(placeData?.id) || safeStr(existingPlace?.id) || Date.now().toString(),
-    name: safeStr(placeData?.name) || safeStr(existingPlace?.name) || '未知地点',
+    name: derivePlaceName(placeData, existingPlace),
     location: normalizePlaceLocation(placeData?.location || existingPlace?.location),
     category: safeStr(placeData?.category) || safeStr(existingPlace?.category) || '景点',
     address: displayAddress,
@@ -237,6 +253,7 @@ const extractPoiAddress = (poi) => ({
   district: `${safeStr(poi?.pname)}${safeStr(poi?.cityname)}${safeStr(poi?.adname)}`,
   address: safeStr(poi?.address),
   city: safeStr(poi?.cityname),
+  name: safeStr(poi?.name),
   location: poi?.location ? normalizePlaceLocation({ lng: poi.location.lng, lat: poi.location.lat }) : null,
 });
 
@@ -283,6 +300,12 @@ const getSuggestedViewport = (places = []) => {
     zoom,
     center: [(minLng + maxLng) / 2, (minLat + maxLat) / 2],
   };
+};
+
+const getStayDurationOptions = (currentMinute) => {
+  const values = new Set([Math.max(15, Math.round(Number(currentMinute) || 0))]);
+  for (let minute = 15; minute <= 720; minute += 15) values.add(minute);
+  return Array.from(values).sort((a, b) => a - b);
 };
 
 const flattenTripPlaceIds = (trip) => {
@@ -767,6 +790,8 @@ export default function App() {
   const searchRequestRef = useRef(0);
   const itinerarySearchRequestRef = useRef(0);
   const favoriteActionTokenRef = useRef(0);
+  const repairRequestTokenRef = useRef(0);
+  const repairingPlaceIdsRef = useRef(new Set());
 
   // --- 本地缓存备份 ---
   useEffect(() => { localStorage.setItem('travel_saved_places', JSON.stringify(savedPlaces)); }, [savedPlaces]);
@@ -863,7 +888,7 @@ export default function App() {
       };
       fetchCloudData();
     }
-  }, [user, supabase]);
+  }, [user, supabase, currentCity]);
 
   // 初始化加载：高德地图 & Supabase
   useEffect(() => {
@@ -1274,7 +1299,7 @@ export default function App() {
   };
 
   const handleSavePlace = async (placeData, stayOpen = false) => {
-    const placeName = safeStr(placeData.name) || '未知地点';
+    const placeName = derivePlaceName(placeData);
     const inferredCity = inferCityName(placeData, currentCity);
     const dedupeKey = placeIdentityKey(placeData, currentCity);
     const existingByKey = savedPlaces.find((place) => placeIdentityKey(place, inferredCity) === dedupeKey);
@@ -1305,7 +1330,7 @@ export default function App() {
           district: safeStr(resolvedAddress.district) || optimisticPlace.district,
           location: normalizePlaceLocation(resolvedAddress.location) || optimisticPlace.location,
           city: safeStr(resolvedAddress.city) || optimisticPlace.city,
-        }, currentCity, optimisticPlace);
+      }, currentCity, optimisticPlace);
         upsertSavedPlaceLocally(hydratedPlace, dedupeKey);
         if (user && !user.is_anonymous && supabase) {
           supabase.from('places').upsert({ ...hydratedPlace, user_id: user.id }).catch((e) => logCloudError('Save hydrated place', e));
@@ -1397,7 +1422,7 @@ export default function App() {
   };
 
 
-  const resolveAddressForPlace = async (placeData) => {
+  async function resolveAddressForPlace(placeData) {
     const normalizedInput = normalizeSearchCandidate(placeData, currentCity) || placeData;
     const location = getLngLat(normalizedInput?.location);
     const direct = safeMergeAddress(placeData?.district, placeData?.address);
@@ -1405,10 +1430,15 @@ export default function App() {
       return {
         address: stripDistrictPrefix(placeData?.address, placeData?.district),
         district: safeStr(placeData?.district),
+        name: safeStr(placeData?.name),
       };
     }
     if (!window.AMap) {
-      return { address: normalizeAddressText(normalizedInput), district: safeStr(normalizedInput?.district) };
+      return {
+        address: normalizeAddressText(normalizedInput),
+        district: safeStr(normalizedInput?.district),
+        name: derivePlaceName(normalizedInput),
+      };
     }
 
     // For lightweight search suggestions, fetch the full POI detail first.
@@ -1438,6 +1468,7 @@ export default function App() {
 
         if (resolvedByKeyword && !isPlaceholderAddress(safeMergeAddress(resolvedByKeyword.district, resolvedByKeyword.address))) {
           return {
+            name: safeStr(resolvedByKeyword.name) || derivePlaceName({ ...normalizedInput, ...resolvedByKeyword }),
             district: resolvedByKeyword.district,
             address: stripDistrictPrefix(resolvedByKeyword.address, resolvedByKeyword.district),
             location: resolvedByKeyword.location || normalizePlaceLocation(normalizedInput?.location),
@@ -1450,7 +1481,11 @@ export default function App() {
     }
 
     if (!location) {
-      return { address: normalizeAddressText(normalizedInput), district: safeStr(normalizedInput?.district) };
+      return {
+        address: normalizeAddressText(normalizedInput),
+        district: safeStr(normalizedInput?.district),
+        name: derivePlaceName(normalizedInput),
+      };
     }
 
     // Try PlaceSearch around the clicked coordinate first.
@@ -1474,6 +1509,7 @@ export default function App() {
         });
         if (resolved) {
           return {
+            name: safeStr(resolved.name) || derivePlaceName({ ...normalizedInput, ...resolved }),
             district: resolved.district,
             address: stripDistrictPrefix(resolved.address, resolved.district),
             location: resolved.location || normalizePlaceLocation(normalizedInput?.location),
@@ -1506,6 +1542,7 @@ export default function App() {
         });
         if (resolved) {
           return {
+            name: derivePlaceName({ ...normalizedInput, ...resolved }),
             district: resolved.district,
             address: stripDistrictPrefix(resolved.address, resolved.district),
             city: resolved.city || safeStr(normalizedInput?.city),
@@ -1516,8 +1553,13 @@ export default function App() {
       }
     }
 
-    return { address: normalizeAddressText(normalizedInput), district: safeStr(normalizedInput?.district), city: safeStr(normalizedInput?.city) };
-  };
+    return {
+      address: normalizeAddressText(normalizedInput),
+      district: safeStr(normalizedInput?.district),
+      city: safeStr(normalizedInput?.city),
+      name: derivePlaceName(normalizedInput),
+    };
+  }
 
   const createSavedPlaceFromSource = async (placeData) => {
     const placeName = safeStr(placeData?.name) || '未知地点';
@@ -1527,7 +1569,7 @@ export default function App() {
     const existingByKey = savedPlaces.find((place) => placeIdentityKey(place, inferredCity) === dedupeKey);
     const newPlace = normalizeSavedPlaceRecord({
       id: existingByKey?.id || placeData?.id || Date.now().toString(),
-      name: placeName,
+      name: safeStr(resolvedAddress.name) || placeName,
       location: normalizePlaceLocation(resolvedAddress.location) || normalizePlaceLocation(placeData?.location),
       category: safeStr(placeData?.category) || '景点',
       address: safeStr(resolvedAddress.address) || stripDistrictPrefix(placeData?.address, placeData?.district),
@@ -1545,6 +1587,42 @@ export default function App() {
     }
     return newPlace;
   };
+
+  useEffect(() => {
+    if (mapStatus !== 'success' || !window.AMap) return;
+    const requestToken = ++repairRequestTokenRef.current;
+    const candidates = savedPlaces.filter((place) => (
+      !repairingPlaceIdsRef.current.has(safeStr(place.id)) &&
+      (isPlaceholderPlaceName(place.name) || isPlaceholderAddress(place.address) || isPlaceholderAddress(normalizeAddressText(place)))
+    ));
+
+    if (candidates.length === 0) return;
+
+    candidates.forEach((place) => {
+      const placeId = safeStr(place.id);
+      if (!placeId) return;
+      repairingPlaceIdsRef.current.add(placeId);
+      resolveAddressForPlace(place)
+        .then((resolvedAddress) => {
+          if (repairRequestTokenRef.current !== requestToken) return;
+          const repairedPlace = normalizeSavedPlaceRecord({
+            ...place,
+            ...resolvedAddress,
+            name: derivePlaceName({ ...place, ...resolvedAddress }, place),
+          }, currentCity, place);
+          if (safeStr(repairedPlace.name) === safeStr(place.name) && safeStr(repairedPlace.address) === safeStr(place.address)) return;
+          upsertSavedPlaceLocally(repairedPlace, placeIdentityKey(repairedPlace, repairedPlace.city || currentCity));
+          if (user && !user.is_anonymous && supabase) {
+            supabase.from('places').upsert({ ...repairedPlace, user_id: user.id }).catch((e) => logCloudError('Repair saved place', e));
+          }
+        })
+        .catch((e) => logCloudError('Repair saved place address', e))
+        .finally(() => {
+          repairingPlaceIdsRef.current.delete(placeId);
+        });
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedPlaces, mapStatus, currentCity, user, supabase]);
 
   const createTrip = async (newTrip) => {
     const normalizedTrip = normalizeTrip(newTrip);
@@ -1853,12 +1931,12 @@ export default function App() {
     if (!activeTripId || !event?.lnglat) return;
     await addPlaceObjectToActiveTrip({
       id: `map_pick_${Date.now()}`,
-      name: '地图选点',
+      name: '',
       location: { lng: event.lnglat.lng, lat: event.lnglat.lat },
       district: '',
-      address: '地图标记地点',
+      address: '',
       city: currentCity,
-      category: '地图选点',
+      category: '地点',
     });
   };
 
@@ -2651,7 +2729,6 @@ export default function App() {
                         const transitMinute = row.transitMinute || 0;
                         const modeLabel = segMode === 'transit' ? '公交' : segMode === 'riding' ? '骑行' : segMode === 'walking' ? '步行' : '驾车';
                         const currentStayMinute = Math.max(15, Number(stayMinutesByPlace[row.place.id]) || row.stayMinutes);
-                        const stayParts = splitDurationMinute(currentStayMinute);
                         return (
                           <div key={`timeline_${row.id}`} className="group bg-white rounded-[24px] p-4 border border-slate-100 shadow-sm transition-all relative">
                             <div className="flex justify-between items-start gap-3">
@@ -2677,7 +2754,17 @@ export default function App() {
                                     <div className="flex items-center gap-1 rounded-full bg-slate-50 border border-slate-100 px-2 py-1">
                                       <Clock size={14} />
                                       <span className="text-[10px]">停留</span>
-                                      <span className="text-[10px] font-bold text-slate-700">{formatDurationCn(currentStayMinute)}</span>
+                                      <select
+                                        value={currentStayMinute}
+                                        onChange={(event) => updateStayMinutes(row.place.id, Math.max(15, Number(event.target.value) || 15))}
+                                        className="bg-transparent text-[10px] font-bold text-slate-700 outline-none appearance-none cursor-pointer pr-3"
+                                      >
+                                        {getStayDurationOptions(currentStayMinute).map((minute) => (
+                                          <option key={`stay_${row.place.id}_${minute}`} value={minute}>
+                                            {formatDurationCn(minute)}
+                                          </option>
+                                        ))}
+                                      </select>
                                     </div>
                                     {rowIndex > 0 ? <div className="text-[10px] px-2 py-1 rounded-full bg-slate-50 border border-slate-100 text-slate-500">{modeLabel} · {formatDurationCn(transitMinute)}</div> : null}
                                   </div>
@@ -2694,38 +2781,6 @@ export default function App() {
                                   <option value="walking">步行</option>
                                 </select>
                               </div>
-                            </div>
-                            <div className="mt-3 grid grid-cols-2 gap-2">
-                              <label className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
-                                <span className="block text-[10px] font-semibold text-slate-400 mb-1">停留小时</span>
-                                <input
-                                  type="number"
-                                  min="0"
-                                  max="24"
-                                  step="1"
-                                  value={stayParts.hour}
-                                  onChange={(event) => {
-                                    const nextHour = Math.max(0, Math.min(24, Number(event.target.value) || 0));
-                                    updateStayMinutes(row.place.id, nextHour * 60 + stayParts.minute);
-                                  }}
-                                  className="w-full bg-transparent text-sm font-bold text-slate-700 outline-none"
-                                />
-                              </label>
-                              <label className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
-                                <span className="block text-[10px] font-semibold text-slate-400 mb-1">停留分钟</span>
-                                <input
-                                  type="number"
-                                  min="0"
-                                  max="59"
-                                  step="1"
-                                  value={stayParts.minute}
-                                  onChange={(event) => {
-                                    const nextMinute = Math.max(0, Math.min(59, Number(event.target.value) || 0));
-                                    updateStayMinutes(row.place.id, stayParts.hour * 60 + nextMinute);
-                                  }}
-                                  className="w-full bg-transparent text-sm font-bold text-slate-700 outline-none"
-                                />
-                              </label>
                             </div>
                             <div className="flex items-center justify-between mt-5 pt-4 border-t border-dashed border-slate-100 gap-3">
                               <div className="flex flex-col">
