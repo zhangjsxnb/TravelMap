@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useMemo, useRef, useCallback, memo } from 'react';
+﻿import { useState, useEffect, useMemo, useRef, memo } from 'react';
 import { 
   Map as MapIcon, List, User, Search, MapPin, Plus, Heart, 
   Navigation, CheckCircle2, Circle, Clock,
@@ -98,6 +98,14 @@ const formatDurationCn = (totalMinute) => {
   return `${hour}小时${minute}分`;
 };
 
+const splitDurationMinute = (totalMinute) => {
+  const safeMinute = Math.max(15, Math.round(Number(totalMinute) || 0));
+  return {
+    hour: Math.floor(safeMinute / 60),
+    minute: safeMinute % 60,
+  };
+};
+
 const estimateStayMinutes = (place) => {
   const name = safeStr(place?.name);
   const category = safeStr(place?.category);
@@ -185,30 +193,6 @@ const normalizeAddressText = (placeData) => {
 
 const isPlaceholderAddress = (value) => /^(地图标记地点|地址待补全)$/.test(safeStr(value).trim());
 
-const isPlaceholderPlaceName = (value) => /^(地图选点|地图标记地点|未知地点)$/.test(safeStr(value).trim());
-
-const derivePlaceName = (placeData = {}, existingPlace = null) => {
-  const candidates = [
-    placeData?.name,
-    existingPlace?.name,
-    placeData?.address,
-    existingPlace?.address,
-    placeData?.district,
-    existingPlace?.district,
-  ];
-
-  for (const candidate of candidates) {
-    const text = safeStr(candidate).trim();
-    if (!text) continue;
-    if (!isPlaceholderPlaceName(text) && !isPlaceholderAddress(text)) return text;
-  }
-
-  const mergedAddress = safeMergeAddress(placeData?.district || existingPlace?.district, placeData?.address || existingPlace?.address);
-  if (mergedAddress && !isPlaceholderAddress(mergedAddress)) return mergedAddress;
-
-  return '未知地点';
-};
-
 const normalizeSavedPlaceRecord = (placeData, fallbackCity = '', existingPlace = null) => {
   const nextDistrict = safeStr(placeData?.district || existingPlace?.district).trim();
   const rawAddress = stripDistrictPrefix(
@@ -222,7 +206,7 @@ const normalizeSavedPlaceRecord = (placeData, fallbackCity = '', existingPlace =
 
   return {
     id: safeStr(placeData?.id) || safeStr(existingPlace?.id) || Date.now().toString(),
-    name: derivePlaceName(placeData, existingPlace),
+    name: safeStr(placeData?.name) || safeStr(existingPlace?.name) || '未知地点',
     location: normalizePlaceLocation(placeData?.location || existingPlace?.location),
     category: safeStr(placeData?.category) || safeStr(existingPlace?.category) || '景点',
     address: displayAddress,
@@ -253,7 +237,6 @@ const extractPoiAddress = (poi) => ({
   district: `${safeStr(poi?.pname)}${safeStr(poi?.cityname)}${safeStr(poi?.adname)}`,
   address: safeStr(poi?.address),
   city: safeStr(poi?.cityname),
-  name: safeStr(poi?.name),
   location: poi?.location ? normalizePlaceLocation({ lng: poi.location.lng, lat: poi.location.lat }) : null,
 });
 
@@ -300,38 +283,6 @@ const getSuggestedViewport = (places = []) => {
     zoom,
     center: [(minLng + maxLng) / 2, (minLat + maxLat) / 2],
   };
-};
-
-const STAY_PICKER_HOURS = Array.from({ length: 13 }, (_, index) => index);
-const STAY_PICKER_MINUTES = [0, 15, 30, 45];
-
-const normalizeStayMinute = (value) => (
-  Math.max(15, Math.min(24 * 60, Math.round(Number(value) || 0)))
-);
-
-const toStayPickerValue = (totalMinute) => {
-  const normalized = normalizeStayMinute(totalMinute);
-  const hour = Math.floor(normalized / 60);
-  const minute = normalized % 60;
-  return {
-    hour,
-    minute: STAY_PICKER_MINUTES.includes(minute) ? minute : 0,
-  };
-};
-
-const buildSegmentCacheKey = ({ start, end, mode, city }) => {
-  const startText = Array.isArray(start) ? `${start[0]},${start[1]}` : 'no_start';
-  const endText = Array.isArray(end) ? `${end[0]},${end[1]}` : 'no_end';
-  return `${startText}__${endText}__${mode}__${safeStr(city)}`;
-};
-
-const inferRouteCity = (startPlace, endPlace, fallbackCity) => {
-  const startCity = inferCityName(startPlace, fallbackCity);
-  const endCity = inferCityName(endPlace, fallbackCity);
-  if (startCity && endCity && startCity === endCity) return startCity;
-  if (startCity) return startCity;
-  if (endCity) return endCity;
-  return fallbackCity === '全国' ? '北京' : fallbackCity;
 };
 
 const flattenTripPlaceIds = (trip) => {
@@ -668,78 +619,6 @@ const RealMapBase = ({ places = [], isRoute = false, mapStatus, mapErrorMsg, cur
     </div>
   );
 };
-
-const StayDurationPicker = ({ open, initialMinute, onClose, onConfirm }) => {
-  const initialValue = useMemo(() => toStayPickerValue(initialMinute), [initialMinute]);
-  const [hour, setHour] = useState(initialValue.hour);
-  const [minute, setMinute] = useState(initialValue.minute);
-
-  useEffect(() => {
-    if (!open) return;
-    setHour(initialValue.hour);
-    setMinute(initialValue.minute);
-  }, [initialValue, open]);
-
-  if (!open) return null;
-
-  const confirmValue = () => {
-    onConfirm(normalizeStayMinute(hour * 60 + minute));
-  };
-
-  return (
-    <div className="fixed inset-0 z-[170] flex items-center justify-center bg-black/35 backdrop-blur-sm p-4" onClick={onClose}>
-      <div className="w-full max-w-[260px] rounded-[28px] bg-white shadow-2xl overflow-hidden" onClick={(event) => event.stopPropagation()}>
-        <div className="flex items-center justify-between px-5 pt-5 pb-3 border-b border-slate-100">
-          <div>
-            <h3 className="text-base font-black text-slate-800">选择停留时间</h3>
-            <p className="text-[11px] text-slate-400 mt-1">{formatDurationCn(hour * 60 + minute)}</p>
-          </div>
-          <button type="button" onClick={onClose} className="w-8 h-8 rounded-full bg-slate-50 text-slate-500 flex items-center justify-center hover:bg-slate-100 transition-colors">
-            <X size={16} />
-          </button>
-        </div>
-        <div className="grid grid-cols-2 relative">
-          <div className="absolute left-3 right-3 top-1/2 -translate-y-1/2 h-14 rounded-2xl border-2 border-slate-900 pointer-events-none" />
-          <div className="h-72 overflow-y-auto py-[108px] snap-y snap-mandatory">
-            {STAY_PICKER_HOURS.map((value) => {
-              const selected = value === hour;
-              return (
-                <button
-                  key={`stay_hour_${value}`}
-                  type="button"
-                  onClick={() => setHour(value)}
-                  className={`h-14 w-full snap-center text-3xl font-black transition-colors ${selected ? 'bg-blue-600 text-white' : 'text-slate-900 hover:bg-slate-50'}`}
-                >
-                  {String(value).padStart(2, '0')}
-                </button>
-              );
-            })}
-          </div>
-          <div className="h-72 overflow-y-auto py-[108px] border-l border-slate-200 snap-y snap-mandatory">
-            {STAY_PICKER_MINUTES.map((value) => {
-              const selected = value === minute;
-              return (
-                <button
-                  key={`stay_minute_${value}`}
-                  type="button"
-                  onClick={() => setMinute(value)}
-                  className={`h-14 w-full snap-center text-3xl font-black transition-colors ${selected ? 'bg-blue-600 text-white' : 'text-slate-900 hover:bg-slate-50'}`}
-                >
-                  {String(value).padStart(2, '0')}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-        <div className="flex gap-3 px-5 py-4 border-t border-slate-100">
-          <button type="button" onClick={onClose} className="flex-1 h-11 rounded-2xl bg-slate-100 text-slate-600 font-bold">取消</button>
-          <button type="button" onClick={confirmValue} className="flex-1 h-11 rounded-2xl bg-blue-600 text-white font-bold">确定</button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
 const RealMap = memo(RealMapBase);
 
 // ==========================================
@@ -810,19 +689,6 @@ export default function App() {
   const [editingTripId, setEditingTripId] = useState(null);
   const [editingTripName, setEditingTripName] = useState('');
 
-  // 统一退出行程重命名态，避免状态残留
-  const cancelEditingTrip = () => {
-    setEditingTripId(null);
-    setEditingTripName('');
-  };
-
-  // 仅在点击行程内容区时打开详情，避免和编辑/删除按钮冲突
-  const openTripPanel = (tripId) => {
-    if (editingTripId) return;
-    setActiveTripId(tripId);
-    setShowRoutePanel(true);
-  };
-
   const [editingMemoId, setEditingMemoId] = useState(null);
   const [editingMemoText, setEditingMemoText] = useState('');
 
@@ -845,12 +711,11 @@ export default function App() {
   const [newTripDayCount, setNewTripDayCount] = useState(1);
   const [newTripSelectedPlaceIds, setNewTripSelectedPlaceIds] = useState([]);
   const [newTripPlaceDayMap, setNewTripPlaceDayMap] = useState({});
-  const [stayPickerState, setStayPickerState] = useState({ open: false, placeId: '', minute: 90 });
   
   // 分段交通方式配置
   const [segmentModes, setSegmentModes] = useState([]); 
   const [segmentRoutes, setSegmentRoutes] = useState([]); 
-  const [isCalculatingSegments, setIsCalculatingSegments] = useState(false);
+  const [, setIsCalculatingSegments] = useState(false);
   const [stayMinutesByPlace, setStayMinutesByPlace] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('travel_stay_minutes') || '{}');
@@ -899,12 +764,9 @@ export default function App() {
 
   const autoComplete = useRef(null);
   const routeCacheRef = useRef(new Map());
-  const segmentRequestSeqRef = useRef(0);
   const searchRequestRef = useRef(0);
   const itinerarySearchRequestRef = useRef(0);
   const favoriteActionTokenRef = useRef(0);
-  const repairRequestTokenRef = useRef(0);
-  const repairingPlaceIdsRef = useRef(new Set());
 
   // --- 本地缓存备份 ---
   useEffect(() => { localStorage.setItem('travel_saved_places', JSON.stringify(savedPlaces)); }, [savedPlaces]);
@@ -1001,7 +863,7 @@ export default function App() {
       };
       fetchCloudData();
     }
-  }, [user, supabase, currentCity]);
+  }, [user, supabase]);
 
   // 初始化加载：高德地图 & Supabase
   useEffect(() => {
@@ -1266,116 +1128,102 @@ export default function App() {
     setIsSearchingItinerary(false);
   }, [activeTripId, currentRouteDay, showRoutePanel]);
 
-  const fetchSegmentRoute = useCallback(async ({ startPlace, endPlace, mode }) => {
-    const start = getLngLat(startPlace?.location);
-    const end = getLngLat(endPlace?.location);
-    const routeCity = inferRouteCity(startPlace, endPlace, currentCity);
-    const cacheKey = buildSegmentCacheKey({ start, end, mode, city: routeCity });
-
-    if (!start || !end) {
-      return { distance: 0, time: 0, path: start && end ? [start, end] : [], mode, pending: false };
-    }
-
-    const cached = routeCacheRef.current.get(cacheKey);
-    if (cached) return cached;
-
-    const result = await new Promise((resolve) => {
-      let searcher;
-      const finish = (payload) => {
-        try {
-          searcher?.clear?.();
-        } catch {
-          void 0;
-        }
-        resolve({ ...payload, mode, pending: false });
-      };
-
-      try {
-        if (mode === 'walking' && window.AMap.Walking) searcher = new window.AMap.Walking();
-        else if (mode === 'riding' && window.AMap.Riding) searcher = new window.AMap.Riding();
-        else if (mode === 'transit' && window.AMap.Transfer) searcher = new window.AMap.Transfer({ city: routeCity });
-        else if (window.AMap.Driving) searcher = new window.AMap.Driving();
-
-        if (!searcher?.search) {
-          finish({ distance: 0, time: 0, path: [start, end] });
-          return;
-        }
-
-        searcher.search(start, end, (status, searchResult) => {
-          try {
-            if (status === 'complete') {
-              let distance = 0;
-              let time = 0;
-              let path = [];
-              if (mode === 'transit' && searchResult?.plans?.length > 0) {
-                distance = searchResult.plans[0].distance;
-                time = searchResult.plans[0].time;
-                path = (searchResult.plans[0].segments || []).flatMap((seg) => [
-                  ...(seg.walking?.steps || []).flatMap((step) => step.path || []),
-                  ...(seg.transit?.lines || []).flatMap((line) => line.path || []),
-                ]);
-              } else if (searchResult?.routes?.length > 0) {
-                distance = searchResult.routes[0].distance;
-                time = searchResult.routes[0].time;
-                path = (searchResult.routes[0].steps || []).flatMap((step) => step.path || []);
-              }
-              finish({ distance, time, path: path.length >= 2 ? path : [start, end] });
-              return;
-            }
-
-            const dist = window.AMap?.GeometryUtil?.distance?.(start, end) || 0;
-            const speed = mode === 'walking' ? 1.2 : mode === 'riding' ? 4 : 10;
-            finish({ distance: dist, time: dist / speed, path: [start, end] });
-          } catch {
-            finish({ distance: 0, time: 0, path: [start, end] });
-          }
-        });
-      } catch {
-        finish({ distance: 0, time: 0, path: [start, end] });
-      }
-    });
-
-    routeCacheRef.current.set(cacheKey, result);
-    return result;
-  }, [currentCity]);
-
   // 获取分段路线详情（独立计算每一段的出行方式）
   useEffect(() => {
+    const dayPlaces = activeTrip?.days?.[Math.max(0, currentRouteDay - 1)]?.places || [];
+    const currentDayTripPlaces = dayPlaces
+      .map((pid) => savedPlacesById.get(safeStr(pid)))
+      .filter(Boolean);
+    const currentDayTripPlaceIds = currentDayTripPlaces.map((place) => place.id).join(',');
     if (!window.AMap || currentDayTripPlaces.length < 2 || !showRoutePanel) {
       setSegmentRoutes([]);
-      setIsCalculatingSegments(false);
       return;
     }
     
-    const requestSeq = ++segmentRequestSeqRef.current;
-    const segmentCount = Math.max(0, currentDayTripPlaces.length - 1);
-    setSegmentRoutes((prev) => Array.from({ length: segmentCount }, (_, index) => prev[index] || { distance: 0, time: 0, path: [], pending: true }));
+    let canceled = false;
     setIsCalculatingSegments(true);
 
     const fetchSegments = async () => {
-      const results = await Promise.all(
-        currentDayTripPlaces.slice(0, -1).map((place, index) => fetchSegmentRoute({
-          startPlace: place,
-          endPlace: currentDayTripPlaces[index + 1],
-          mode: segmentModes[index] || 'driving',
-        }))
-      );
+      const cacheKey = `${currentDayTripPlaceIds}__${JSON.stringify(segmentModes)}__${currentCity}`;
+      const cached = routeCacheRef.current.get(cacheKey);
+      if (cached) {
+        setSegmentRoutes(cached);
+        setIsCalculatingSegments(false);
+        return;
+      }
+      const results = [];
+      for (let i = 0; i < currentDayTripPlaces.length - 1; i++) {
+         const p1 = currentDayTripPlaces[i];
+         const p2 = currentDayTripPlaces[i+1];
+         const start = getLngLat(p1.location);
+         const end = getLngLat(p2.location);
+         
+         const currentMode = segmentModes[i] || 'driving';
 
-      if (segmentRequestSeqRef.current === requestSeq) {
+         if (!start || !end) {
+           results.push({ distance: 0, time: 0 });
+           continue;
+         }
+
+         const res = await new Promise((resolve) => {
+           let searcher;
+           try {
+             if (currentMode === 'walking' && window.AMap.Walking) searcher = new window.AMap.Walking();
+             else if (currentMode === 'riding' && window.AMap.Riding) searcher = new window.AMap.Riding();
+             else if (currentMode === 'transit' && window.AMap.Transfer) {
+               const safeCity = currentCity === '全国' ? '北京' : currentCity;
+               searcher = new window.AMap.Transfer({ city: safeCity });
+             }
+             else if (window.AMap.Driving) searcher = new window.AMap.Driving();
+  
+             if (searcher) {
+               searcher.search(start, end, (status, result) => {
+                 try {
+                    if (status === 'complete') {
+                       let distance = 0, time = 0, path = [];
+                       if (currentMode === 'transit' && result.plans && result.plans.length > 0) {
+                          distance = result.plans[0].distance;
+                          time = result.plans[0].time;
+                          path = (result.plans[0].segments || []).flatMap((seg) => [
+                            ...(seg.walking?.steps || []).flatMap((step) => step.path || []),
+                            ...(seg.transit?.lines || []).flatMap((line) => line.path || []),
+                          ]);
+                       } else if (result.routes && result.routes.length > 0) {
+                          distance = result.routes[0].distance;
+                          time = result.routes[0].time;
+                          path = (result.routes[0].steps || []).flatMap((step) => step.path || []);
+                       }
+                       resolve({ distance, time, path: path.length >= 2 ? path : [start, end] });
+                    } else {
+                       const dist = window.AMap.GeometryUtil.distance(start, end);
+                       const speed = currentMode === 'walking' ? 1.2 : currentMode === 'riding' ? 4 : 10;
+                       resolve({ distance: dist, time: dist / speed, path: [start, end] });
+                    }
+                  } catch {
+                    resolve({ distance: 0, time: 0, path: [start, end] });
+                  }
+               });
+             } else {
+               resolve({ distance: 0, time: 0, path: [start, end] });
+             }
+           } catch {
+             resolve({ distance: 0, time: 0, path: [start, end] });
+           }
+         });
+         results.push(res);
+      }
+      if (!canceled) {
         setSegmentRoutes(results);
+        routeCacheRef.current.set(cacheKey, results);
         setIsCalculatingSegments(false);
       }
     };
-
-    fetchSegments().catch(() => {
-      if (segmentRequestSeqRef.current === requestSeq) {
-        setSegmentRoutes(Array.from({ length: segmentCount }, () => ({ distance: 0, time: 0, path: [], pending: false })));
-        setIsCalculatingSegments(false);
-      }
-    });
-  }, [currentDayTripPlaces, fetchSegmentRoute, segmentModes, mapStatus, showRoutePanel]);
+    fetchSegments();
+    return () => { canceled = true; };
+  }, [activeTrip, currentRouteDay, savedPlacesById, segmentModes, currentCity, mapStatus, showRoutePanel]);
 
   const handleSegmentModeChange = (index, newMode) => {
+    routeCacheRef.current.clear();
     setSegmentModes(prev => {
       const next = [...prev];
       next[index] = newMode;
@@ -1391,7 +1239,7 @@ export default function App() {
   void setAllSegmentModes;
 
   const updateStayMinutes = (placeId, nextMinute) => {
-    const normalizedMinute = normalizeStayMinute(nextMinute);
+    const normalizedMinute = Math.max(15, Math.min(24 * 60, Math.round(Number(nextMinute) || 0)));
     setStayMinutesByPlace((prev) => ({
       ...prev,
       [placeId]: normalizedMinute,
@@ -1426,7 +1274,7 @@ export default function App() {
   };
 
   const handleSavePlace = async (placeData, stayOpen = false) => {
-    const placeName = derivePlaceName(placeData);
+    const placeName = safeStr(placeData.name) || '未知地点';
     const inferredCity = inferCityName(placeData, currentCity);
     const dedupeKey = placeIdentityKey(placeData, currentCity);
     const existingByKey = savedPlaces.find((place) => placeIdentityKey(place, inferredCity) === dedupeKey);
@@ -1457,7 +1305,7 @@ export default function App() {
           district: safeStr(resolvedAddress.district) || optimisticPlace.district,
           location: normalizePlaceLocation(resolvedAddress.location) || optimisticPlace.location,
           city: safeStr(resolvedAddress.city) || optimisticPlace.city,
-      }, currentCity, optimisticPlace);
+        }, currentCity, optimisticPlace);
         upsertSavedPlaceLocally(hydratedPlace, dedupeKey);
         if (user && !user.is_anonymous && supabase) {
           supabase.from('places').upsert({ ...hydratedPlace, user_id: user.id }).catch((e) => logCloudError('Save hydrated place', e));
@@ -1549,7 +1397,7 @@ export default function App() {
   };
 
 
-  async function resolveAddressForPlace(placeData) {
+  const resolveAddressForPlace = async (placeData) => {
     const normalizedInput = normalizeSearchCandidate(placeData, currentCity) || placeData;
     const location = getLngLat(normalizedInput?.location);
     const direct = safeMergeAddress(placeData?.district, placeData?.address);
@@ -1557,15 +1405,10 @@ export default function App() {
       return {
         address: stripDistrictPrefix(placeData?.address, placeData?.district),
         district: safeStr(placeData?.district),
-        name: safeStr(placeData?.name),
       };
     }
     if (!window.AMap) {
-      return {
-        address: normalizeAddressText(normalizedInput),
-        district: safeStr(normalizedInput?.district),
-        name: derivePlaceName(normalizedInput),
-      };
+      return { address: normalizeAddressText(normalizedInput), district: safeStr(normalizedInput?.district) };
     }
 
     // For lightweight search suggestions, fetch the full POI detail first.
@@ -1595,7 +1438,6 @@ export default function App() {
 
         if (resolvedByKeyword && !isPlaceholderAddress(safeMergeAddress(resolvedByKeyword.district, resolvedByKeyword.address))) {
           return {
-            name: safeStr(resolvedByKeyword.name) || derivePlaceName({ ...normalizedInput, ...resolvedByKeyword }),
             district: resolvedByKeyword.district,
             address: stripDistrictPrefix(resolvedByKeyword.address, resolvedByKeyword.district),
             location: resolvedByKeyword.location || normalizePlaceLocation(normalizedInput?.location),
@@ -1608,11 +1450,7 @@ export default function App() {
     }
 
     if (!location) {
-      return {
-        address: normalizeAddressText(normalizedInput),
-        district: safeStr(normalizedInput?.district),
-        name: derivePlaceName(normalizedInput),
-      };
+      return { address: normalizeAddressText(normalizedInput), district: safeStr(normalizedInput?.district) };
     }
 
     // Try PlaceSearch around the clicked coordinate first.
@@ -1636,7 +1474,6 @@ export default function App() {
         });
         if (resolved) {
           return {
-            name: safeStr(resolved.name) || derivePlaceName({ ...normalizedInput, ...resolved }),
             district: resolved.district,
             address: stripDistrictPrefix(resolved.address, resolved.district),
             location: resolved.location || normalizePlaceLocation(normalizedInput?.location),
@@ -1669,7 +1506,6 @@ export default function App() {
         });
         if (resolved) {
           return {
-            name: derivePlaceName({ ...normalizedInput, ...resolved }),
             district: resolved.district,
             address: stripDistrictPrefix(resolved.address, resolved.district),
             city: resolved.city || safeStr(normalizedInput?.city),
@@ -1680,13 +1516,8 @@ export default function App() {
       }
     }
 
-    return {
-      address: normalizeAddressText(normalizedInput),
-      district: safeStr(normalizedInput?.district),
-      city: safeStr(normalizedInput?.city),
-      name: derivePlaceName(normalizedInput),
-    };
-  }
+    return { address: normalizeAddressText(normalizedInput), district: safeStr(normalizedInput?.district), city: safeStr(normalizedInput?.city) };
+  };
 
   const createSavedPlaceFromSource = async (placeData) => {
     const placeName = safeStr(placeData?.name) || '未知地点';
@@ -1696,7 +1527,7 @@ export default function App() {
     const existingByKey = savedPlaces.find((place) => placeIdentityKey(place, inferredCity) === dedupeKey);
     const newPlace = normalizeSavedPlaceRecord({
       id: existingByKey?.id || placeData?.id || Date.now().toString(),
-      name: safeStr(resolvedAddress.name) || placeName,
+      name: placeName,
       location: normalizePlaceLocation(resolvedAddress.location) || normalizePlaceLocation(placeData?.location),
       category: safeStr(placeData?.category) || '景点',
       address: safeStr(resolvedAddress.address) || stripDistrictPrefix(placeData?.address, placeData?.district),
@@ -1715,42 +1546,6 @@ export default function App() {
     return newPlace;
   };
 
-  useEffect(() => {
-    if (mapStatus !== 'success' || !window.AMap) return;
-    const requestToken = ++repairRequestTokenRef.current;
-    const candidates = savedPlaces.filter((place) => (
-      !repairingPlaceIdsRef.current.has(safeStr(place.id)) &&
-      (isPlaceholderPlaceName(place.name) || isPlaceholderAddress(place.address) || isPlaceholderAddress(normalizeAddressText(place)))
-    ));
-
-    if (candidates.length === 0) return;
-
-    candidates.forEach((place) => {
-      const placeId = safeStr(place.id);
-      if (!placeId) return;
-      repairingPlaceIdsRef.current.add(placeId);
-      resolveAddressForPlace(place)
-        .then((resolvedAddress) => {
-          if (repairRequestTokenRef.current !== requestToken) return;
-          const repairedPlace = normalizeSavedPlaceRecord({
-            ...place,
-            ...resolvedAddress,
-            name: derivePlaceName({ ...place, ...resolvedAddress }, place),
-          }, currentCity, place);
-          if (safeStr(repairedPlace.name) === safeStr(place.name) && safeStr(repairedPlace.address) === safeStr(place.address)) return;
-          upsertSavedPlaceLocally(repairedPlace, placeIdentityKey(repairedPlace, repairedPlace.city || currentCity));
-          if (user && !user.is_anonymous && supabase) {
-            supabase.from('places').upsert({ ...repairedPlace, user_id: user.id }).catch((e) => logCloudError('Repair saved place', e));
-          }
-        })
-        .catch((e) => logCloudError('Repair saved place address', e))
-        .finally(() => {
-          repairingPlaceIdsRef.current.delete(placeId);
-        });
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [savedPlaces, mapStatus, currentCity, user, supabase]);
-
   const createTrip = async (newTrip) => {
     const normalizedTrip = normalizeTrip(newTrip);
     setTrips(prev => [normalizedTrip, ...prev]);
@@ -1760,9 +1555,6 @@ export default function App() {
   };
 
   const removeTrip = async (id) => {
-    if (editingTripId === id) {
-      cancelEditingTrip();
-    }
     const nextTrips = trips.filter(t => t.id !== id);
     setTrips(nextTrips);
     if (activeTripId === id) {
@@ -1778,24 +1570,20 @@ export default function App() {
   const startEditingTrip = (trip, e) => {
     e.stopPropagation();
     setEditingTripId(trip.id);
-    setEditingTripName(safeStr(trip.name));
+    setEditingTripName(trip.name);
   };
 
   const saveTripName = async () => {
-    const nextName = editingTripName.trim();
-    if (!editingTripId) {
-      cancelEditingTrip();
-      return;
+    if (!editingTripName.trim() || !editingTripId) {
+       setEditingTripId(null);
+       return;
     }
-    if (!nextName) {
-      cancelEditingTrip();
-      return;
-    }
-    setTrips(prev => prev.map(t => t.id === editingTripId ? { ...t, name: nextName } : t));
+    setTrips(prev => prev.map(t => t.id === editingTripId ? { ...t, name: editingTripName.trim() } : t));
     if (user && !user.is_anonymous && supabase) {
-      try { await supabase.from('trips').update({ name: nextName }).eq('id', editingTripId); } catch(e){ logCloudError('Rename trip', e); }
+      try { await supabase.from('trips').update({ name: editingTripName.trim() }).eq('id', editingTripId); } catch(e){ logCloudError('Rename trip', e); }
     }
-    cancelEditingTrip();
+    setEditingTripId(null);
+    setEditingTripName('');
   };
 
   const movePlace = async (index, direction) => {
@@ -2065,12 +1853,12 @@ export default function App() {
     if (!activeTripId || !event?.lnglat) return;
     await addPlaceObjectToActiveTrip({
       id: `map_pick_${Date.now()}`,
-      name: '',
+      name: '地图选点',
       location: { lng: event.lnglat.lng, lat: event.lnglat.lat },
       district: '',
-      address: '',
+      address: '地图标记地点',
       city: currentCity,
-      category: '地点',
+      category: '地图选点',
     });
   };
 
@@ -2437,42 +2225,34 @@ export default function App() {
                     <div className="text-center py-6 text-sm text-slate-400">还没创建自定义行程，点击上方卡片或右上角加号创建吧</div>
                   ) : (
                     trips.map(trip => (
-                      <div key={trip.id} className="bg-white p-5 rounded-3xl shadow-sm border border-gray-50">
+                      <div key={trip.id} onClick={() => {setActiveTripId(trip.id); setShowRoutePanel(true)}} className="bg-white p-5 rounded-3xl shadow-sm border border-gray-50 cursor-pointer active:scale-95">
                         <div className="flex justify-between items-start mb-2">
                           {editingTripId === trip.id ? (
-                             <div className="flex-1 flex items-center gap-2 mr-2" data-trip-action="true">
+                             <div className="flex-1 flex items-center gap-2 mr-2">
                                <input
                                  autoFocus
                                  value={editingTripName}
                                  onChange={e => setEditingTripName(e.target.value)}
                                  onBlur={saveTripName}
-                                 onKeyDown={(e) => {
-                                   if (e.key === 'Enter') saveTripName();
-                                   if (e.key === 'Escape') cancelEditingTrip();
-                                 }}
+                                 onKeyDown={e => e.key === 'Enter' && saveTripName()}
                                  onClick={e => e.stopPropagation()}
                                  className="flex-1 font-bold text-lg border-b border-blue-200 outline-none bg-transparent pb-0.5 text-slate-800"
                                />
-                               <button type="button" data-trip-action="true" onMouseDown={(e) => e.preventDefault()} onClick={(e) => { e.stopPropagation(); saveTripName(); }} className="p-1.5 bg-blue-100 text-blue-600 rounded-lg active:scale-95 shrink-0"><CheckCircle2 size={16}/></button>
+                               <button onClick={(e) => { e.stopPropagation(); saveTripName(); }} className="p-1.5 bg-blue-100 text-blue-600 rounded-lg active:scale-95 shrink-0"><CheckCircle2 size={16}/></button>
                              </div>
                           ) : (
-                             <div onClick={() => openTripPanel(trip.id)} className="flex-1 min-w-0 cursor-pointer active:scale-95">
-                               <div className="flex items-center gap-2 min-w-0">
-                                 <h3 className="font-bold text-lg truncate text-slate-800">{safeStr(trip.name)}</h3>
-                                 <button type="button" data-trip-action="true" onClick={(e) => startEditingTrip(trip, e)} className="shrink-0 p-1.5 text-slate-300 hover:text-blue-500 hover:bg-blue-50 rounded-md transition-colors" title="修改名称">
-                                   <Edit2 size={14}/>
-                                 </button>
-                               </div>
-                               <p className="text-xs text-slate-400 flex items-center gap-1 mt-2"><MapPin size={12}/> {flattenTripPlaceIds(trip).length} 个地点 · {(trip.days?.length || 1)} 天</p>
+                             <div className="flex-1 flex items-center gap-2 min-w-0">
+                               <h3 className="font-bold text-lg truncate text-slate-800">{safeStr(trip.name)}</h3>
+                               <button onClick={(e) => startEditingTrip(trip, e)} className="shrink-0 p-1.5 text-slate-300 hover:text-blue-500 hover:bg-blue-50 rounded-md transition-colors" title="淇敼鍚嶇О">
+                                 <Edit2 size={14}/>
+                               </button>
                              </div>
                           )}
-                          <button type="button" data-trip-action="true" onClick={(e) => { e.stopPropagation(); removeTrip(trip.id); }} className="text-slate-300 hover:text-red-400 p-1 shrink-0 ml-2" title="删除行程">
+                          <button onClick={(e) => { e.stopPropagation(); removeTrip(trip.id); }} className="text-slate-300 hover:text-red-400 p-1 shrink-0 ml-2">
                             <Trash2 size={16} />
                           </button>
                         </div>
-                        {editingTripId === trip.id ? (
-                          <p className="text-xs text-slate-400 flex items-center gap-1"><MapPin size={12}/> {flattenTripPlaceIds(trip).length} 个地点 · {(trip.days?.length || 1)} 天</p>
-                        ) : null}
+                        <p className="text-xs text-slate-400 flex items-center gap-1"><MapPin size={12}/> {flattenTripPlaceIds(trip).length} 个地点 · {(trip.days?.length || 1)} 天</p>
                       </div>
                     ))
                   )}
@@ -2867,13 +2647,11 @@ export default function App() {
                       ) : null}
                       {currentDayRows.map((row) => {
                         const rowIndex = timelineRows.findIndex((item) => item.id === row.id);
-                        const segmentIndex = rowIndex - 1;
-                        const hasIncomingSegment = segmentIndex >= 0;
-                        const segMode = hasIncomingSegment ? (segmentModes[segmentIndex] || 'driving') : 'driving';
-                        const segmentInfo = hasIncomingSegment ? segmentRoutes[segmentIndex] : null;
+                        const segMode = segmentModes[Math.max(0, rowIndex - 1)] || 'driving';
                         const transitMinute = row.transitMinute || 0;
                         const modeLabel = segMode === 'transit' ? '公交' : segMode === 'riding' ? '骑行' : segMode === 'walking' ? '步行' : '驾车';
                         const currentStayMinute = Math.max(15, Number(stayMinutesByPlace[row.place.id]) || row.stayMinutes);
+                        const stayParts = splitDurationMinute(currentStayMinute);
                         return (
                           <div key={`timeline_${row.id}`} className="group bg-white rounded-[24px] p-4 border border-slate-100 shadow-sm transition-all relative">
                             <div className="flex justify-between items-start gap-3">
@@ -2896,21 +2674,12 @@ export default function App() {
                                   </div>
                                   <div className="text-[10px] leading-4 text-slate-400 break-words">{normalizeAddressText(row.place)}</div>
                                   <div className="flex items-center flex-wrap gap-1.5 text-slate-400 mt-1">
-                                    <button
-                                      type="button"
-                                      onClick={() => setStayPickerState({ open: true, placeId: row.place.id, minute: currentStayMinute })}
-                                      className="flex items-center gap-1 rounded-full bg-slate-50 border border-slate-100 px-2 py-1 hover:bg-slate-100 transition-colors"
-                                    >
+                                    <div className="flex items-center gap-1 rounded-full bg-slate-50 border border-slate-100 px-2 py-1">
                                       <Clock size={14} />
                                       <span className="text-[10px]">停留</span>
                                       <span className="text-[10px] font-bold text-slate-700">{formatDurationCn(currentStayMinute)}</span>
-                                      <ChevronDown size={12} />
-                                    </button>
-                                    {hasIncomingSegment ? (
-                                      <div className="text-[10px] px-2 py-1 rounded-full bg-slate-50 border border-slate-100 text-slate-500">
-                                        {modeLabel} · {segmentInfo?.pending ? '计算中...' : formatDurationCn(transitMinute)}
-                                      </div>
-                                    ) : null}
+                                    </div>
+                                    {rowIndex > 0 ? <div className="text-[10px] px-2 py-1 rounded-full bg-slate-50 border border-slate-100 text-slate-500">{modeLabel} · {formatDurationCn(transitMinute)}</div> : null}
                                   </div>
                                 </div>
                               </div>
@@ -2918,17 +2687,45 @@ export default function App() {
                                 <select value={currentDayPlaceIds.includes(row.place.id) ? currentRouteDay : Math.max(1, Math.min(totalDays, Number(stayMinutesByPlace[`day_${row.place.id}`] || currentRouteDay)))} onChange={(event) => movePlaceToTripDay(row.place.id, Math.max(1, Math.min(totalDays, Number(event.target.value) || 1)))} className="mb-2 w-full px-2 py-1 rounded-xl border border-slate-200 text-xs font-bold bg-white">
                                   {dayOptions.map((d) => <option key={`d_${row.id}_${d}`} value={d}>D{d}</option>)}
                                 </select>
-                                {hasIncomingSegment ? (
-                                  <select value={segMode} onChange={(event) => handleSegmentModeChange(segmentIndex, event.target.value)} className="w-full px-2 py-1 rounded-xl border border-slate-200 text-xs font-bold bg-white">
-                                    <option value="driving">驾车</option>
-                                    <option value="transit">公交</option>
-                                    <option value="riding">骑行</option>
-                                    <option value="walking">步行</option>
-                                  </select>
-                                ) : (
-                                  <div className="w-full px-2 py-1 rounded-xl border border-slate-100 bg-slate-50 text-[11px] font-semibold text-slate-400 text-center">当天首站</div>
-                                )}
+                                <select value={segMode} onChange={(event) => { if (rowIndex > 0) handleSegmentModeChange(rowIndex - 1, event.target.value); }} className="w-full px-2 py-1 rounded-xl border border-slate-200 text-xs font-bold bg-white">
+                                  <option value="driving">驾车</option>
+                                  <option value="transit">公交</option>
+                                  <option value="riding">骑行</option>
+                                  <option value="walking">步行</option>
+                                </select>
                               </div>
+                            </div>
+                            <div className="mt-3 grid grid-cols-2 gap-2">
+                              <label className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+                                <span className="block text-[10px] font-semibold text-slate-400 mb-1">停留小时</span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max="24"
+                                  step="1"
+                                  value={stayParts.hour}
+                                  onChange={(event) => {
+                                    const nextHour = Math.max(0, Math.min(24, Number(event.target.value) || 0));
+                                    updateStayMinutes(row.place.id, nextHour * 60 + stayParts.minute);
+                                  }}
+                                  className="w-full bg-transparent text-sm font-bold text-slate-700 outline-none"
+                                />
+                              </label>
+                              <label className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+                                <span className="block text-[10px] font-semibold text-slate-400 mb-1">停留分钟</span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max="59"
+                                  step="1"
+                                  value={stayParts.minute}
+                                  onChange={(event) => {
+                                    const nextMinute = Math.max(0, Math.min(59, Number(event.target.value) || 0));
+                                    updateStayMinutes(row.place.id, stayParts.hour * 60 + nextMinute);
+                                  }}
+                                  className="w-full bg-transparent text-sm font-bold text-slate-700 outline-none"
+                                />
+                              </label>
                             </div>
                             <div className="flex items-center justify-between mt-5 pt-4 border-t border-dashed border-slate-100 gap-3">
                               <div className="flex flex-col">
@@ -2960,16 +2757,6 @@ export default function App() {
               </div>
             </div>
           </div>
-
-        <StayDurationPicker
-          open={stayPickerState.open}
-          initialMinute={stayPickerState.minute}
-          onClose={() => setStayPickerState((prev) => ({ ...prev, open: false }))}
-          onConfirm={(minute) => {
-            updateStayMinutes(stayPickerState.placeId, minute);
-            setStayPickerState({ open: false, placeId: '', minute });
-          }}
-        />
 
         {showMemoTemplateModal && (
           <div className="fixed inset-0 z-[160] flex items-center justify-center bg-black/40 backdrop-blur-sm p-6 animate-in fade-in">
