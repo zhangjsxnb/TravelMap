@@ -712,6 +712,19 @@ export default function App() {
   const [editingTripId, setEditingTripId] = useState(null);
   const [editingTripName, setEditingTripName] = useState('');
 
+  // 统一退出行程重命名态，避免状态残留
+  const cancelEditingTrip = () => {
+    setEditingTripId(null);
+    setEditingTripName('');
+  };
+
+  // 编辑状态下不打开行程详情，避免和卡片点击冲突
+  const openTripPanel = (tripId) => {
+    if (editingTripId) return;
+    setActiveTripId(tripId);
+    setShowRoutePanel(true);
+  };
+
   const [editingMemoId, setEditingMemoId] = useState(null);
   const [editingMemoText, setEditingMemoText] = useState('');
 
@@ -1633,6 +1646,9 @@ export default function App() {
   };
 
   const removeTrip = async (id) => {
+    if (editingTripId === id) {
+      cancelEditingTrip();
+    }
     const nextTrips = trips.filter(t => t.id !== id);
     setTrips(nextTrips);
     if (activeTripId === id) {
@@ -1648,20 +1664,24 @@ export default function App() {
   const startEditingTrip = (trip, e) => {
     e.stopPropagation();
     setEditingTripId(trip.id);
-    setEditingTripName(trip.name);
+    setEditingTripName(safeStr(trip.name));
   };
 
   const saveTripName = async () => {
-    if (!editingTripName.trim() || !editingTripId) {
-       setEditingTripId(null);
-       return;
+    const nextName = editingTripName.trim();
+    if (!editingTripId) {
+      cancelEditingTrip();
+      return;
     }
-    setTrips(prev => prev.map(t => t.id === editingTripId ? { ...t, name: editingTripName.trim() } : t));
+    if (!nextName) {
+      cancelEditingTrip();
+      return;
+    }
+    setTrips(prev => prev.map(t => t.id === editingTripId ? { ...t, name: nextName } : t));
     if (user && !user.is_anonymous && supabase) {
-      try { await supabase.from('trips').update({ name: editingTripName.trim() }).eq('id', editingTripId); } catch(e){ logCloudError('Rename trip', e); }
+      try { await supabase.from('trips').update({ name: nextName }).eq('id', editingTripId); } catch(e){ logCloudError('Rename trip', e); }
     }
-    setEditingTripId(null);
-    setEditingTripName('');
+    cancelEditingTrip();
   };
 
   const movePlace = async (index, direction) => {
@@ -2303,7 +2323,7 @@ export default function App() {
                     <div className="text-center py-6 text-sm text-slate-400">还没创建自定义行程，点击上方卡片或右上角加号创建吧</div>
                   ) : (
                     trips.map(trip => (
-                      <div key={trip.id} onClick={() => {setActiveTripId(trip.id); setShowRoutePanel(true)}} className="bg-white p-5 rounded-3xl shadow-sm border border-gray-50 cursor-pointer active:scale-95">
+                      <div key={trip.id} onClick={() => openTripPanel(trip.id)} className="bg-white p-5 rounded-3xl shadow-sm border border-gray-50 cursor-pointer active:scale-95">
                         <div className="flex justify-between items-start mb-2">
                           {editingTripId === trip.id ? (
                              <div className="flex-1 flex items-center gap-2 mr-2">
@@ -2312,21 +2332,24 @@ export default function App() {
                                  value={editingTripName}
                                  onChange={e => setEditingTripName(e.target.value)}
                                  onBlur={saveTripName}
-                                 onKeyDown={e => e.key === 'Enter' && saveTripName()}
+                                 onKeyDown={(e) => {
+                                   if (e.key === 'Enter') saveTripName();
+                                   if (e.key === 'Escape') cancelEditingTrip();
+                                 }}
                                  onClick={e => e.stopPropagation()}
                                  className="flex-1 font-bold text-lg border-b border-blue-200 outline-none bg-transparent pb-0.5 text-slate-800"
                                />
-                               <button onClick={(e) => { e.stopPropagation(); saveTripName(); }} className="p-1.5 bg-blue-100 text-blue-600 rounded-lg active:scale-95 shrink-0"><CheckCircle2 size={16}/></button>
+                               <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={(e) => { e.stopPropagation(); saveTripName(); }} className="p-1.5 bg-blue-100 text-blue-600 rounded-lg active:scale-95 shrink-0"><CheckCircle2 size={16}/></button>
                              </div>
                           ) : (
                              <div className="flex-1 flex items-center gap-2 min-w-0">
                                <h3 className="font-bold text-lg truncate text-slate-800">{safeStr(trip.name)}</h3>
-                               <button onClick={(e) => startEditingTrip(trip, e)} className="shrink-0 p-1.5 text-slate-300 hover:text-blue-500 hover:bg-blue-50 rounded-md transition-colors" title="淇敼鍚嶇О">
+                               <button type="button" onClick={(e) => startEditingTrip(trip, e)} className="shrink-0 p-1.5 text-slate-300 hover:text-blue-500 hover:bg-blue-50 rounded-md transition-colors" title="修改名称">
                                  <Edit2 size={14}/>
                                </button>
                              </div>
                           )}
-                          <button onClick={(e) => { e.stopPropagation(); removeTrip(trip.id); }} className="text-slate-300 hover:text-red-400 p-1 shrink-0 ml-2">
+                          <button type="button" onClick={(e) => { e.stopPropagation(); removeTrip(trip.id); }} className="text-slate-300 hover:text-red-400 p-1 shrink-0 ml-2" title="删除行程">
                             <Trash2 size={16} />
                           </button>
                         </div>
