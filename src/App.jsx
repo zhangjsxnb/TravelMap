@@ -719,7 +719,11 @@ export default function App() {
   };
 
   // 编辑状态下不打开行程详情，避免和卡片点击冲突
-  const openTripPanel = (tripId) => {
+  const openTripPanel = (tripId, event) => {
+    const actionTrigger = event?.target instanceof HTMLElement
+      ? event.target.closest('[data-trip-action="true"]')
+      : null;
+    if (actionTrigger) return;
     if (editingTripId) return;
     setActiveTripId(tripId);
     setShowRoutePanel(true);
@@ -2323,10 +2327,10 @@ export default function App() {
                     <div className="text-center py-6 text-sm text-slate-400">还没创建自定义行程，点击上方卡片或右上角加号创建吧</div>
                   ) : (
                     trips.map(trip => (
-                      <div key={trip.id} onClick={() => openTripPanel(trip.id)} className="bg-white p-5 rounded-3xl shadow-sm border border-gray-50 cursor-pointer active:scale-95">
+                      <div key={trip.id} onClick={(e) => openTripPanel(trip.id, e)} className="bg-white p-5 rounded-3xl shadow-sm border border-gray-50 cursor-pointer active:scale-95">
                         <div className="flex justify-between items-start mb-2">
                           {editingTripId === trip.id ? (
-                             <div className="flex-1 flex items-center gap-2 mr-2">
+                             <div className="flex-1 flex items-center gap-2 mr-2" data-trip-action="true">
                                <input
                                  autoFocus
                                  value={editingTripName}
@@ -2339,17 +2343,17 @@ export default function App() {
                                  onClick={e => e.stopPropagation()}
                                  className="flex-1 font-bold text-lg border-b border-blue-200 outline-none bg-transparent pb-0.5 text-slate-800"
                                />
-                               <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={(e) => { e.stopPropagation(); saveTripName(); }} className="p-1.5 bg-blue-100 text-blue-600 rounded-lg active:scale-95 shrink-0"><CheckCircle2 size={16}/></button>
+                               <button type="button" data-trip-action="true" onMouseDown={(e) => e.preventDefault()} onClick={(e) => { e.stopPropagation(); saveTripName(); }} className="p-1.5 bg-blue-100 text-blue-600 rounded-lg active:scale-95 shrink-0"><CheckCircle2 size={16}/></button>
                              </div>
                           ) : (
                              <div className="flex-1 flex items-center gap-2 min-w-0">
                                <h3 className="font-bold text-lg truncate text-slate-800">{safeStr(trip.name)}</h3>
-                               <button type="button" onClick={(e) => startEditingTrip(trip, e)} className="shrink-0 p-1.5 text-slate-300 hover:text-blue-500 hover:bg-blue-50 rounded-md transition-colors" title="修改名称">
+                               <button type="button" data-trip-action="true" onClick={(e) => startEditingTrip(trip, e)} className="shrink-0 p-1.5 text-slate-300 hover:text-blue-500 hover:bg-blue-50 rounded-md transition-colors" title="修改名称">
                                  <Edit2 size={14}/>
                                </button>
                              </div>
                           )}
-                          <button type="button" onClick={(e) => { e.stopPropagation(); removeTrip(trip.id); }} className="text-slate-300 hover:text-red-400 p-1 shrink-0 ml-2" title="删除行程">
+                          <button type="button" data-trip-action="true" onClick={(e) => { e.stopPropagation(); removeTrip(trip.id); }} className="text-slate-300 hover:text-red-400 p-1 shrink-0 ml-2" title="删除行程">
                             <Trash2 size={16} />
                           </button>
                         </div>
